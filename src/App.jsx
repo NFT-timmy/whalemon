@@ -163,6 +163,18 @@ export default function WhalemonTCG() {
   const [offerTarget, setOfferTarget] = useState(null);
   const [offerAmt, setOfferAmt] = useState("");
 
+useEffect(() => {
+  if(!connected || !walletAddr) return;
+  const loadData = async () => {
+    try {
+      const provider = new window.ethers.BrowserProvider(window.ethereum);
+      const bal = await provider.getBalance(walletAddr);
+      const formatted = parseFloat(window.ethers.formatEther(bal)).toFixed(2);
+      setWalletBalance(formatted);
+    } catch(e) { console.log("Balance error:", e); }
+  };
+  loadData();
+}, [connected, walletAddr]);
   const notify = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3000); };
   const handleConnect = async () => { try { if(!window.ethereum) { alert("Please install MetaMask!"); return; } const accounts = await window.ethereum.request({ method: "eth_requestAccounts" }); if(!accounts || accounts.length === 0) return; try { await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{ chainId: "0x1079", chainName: "Tempo Network", rpcUrls: ["https://rpc.tempo.xyz"], nativeCurrency: { name: "PATHUSD", symbol: "PATHUSD", decimals: 18 }, blockExplorerUrls: ["https://explore.tempo.xyz"] }] }); } catch(chainErr) { console.log("Chain add error:", chainErr); } setWalletAddr(accounts[0]); setConnected(true); } catch(e) { alert("Connection failed: " + e.message); } };
   const handleDisconnect = () => { setConnected(false); setWalletAddr(""); setWalletBalance("0.00"); setPage("whales"); notify("Disconnected", "info"); };
