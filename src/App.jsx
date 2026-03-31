@@ -164,7 +164,7 @@ export default function WhalemonTCG() {
   const [offerAmt, setOfferAmt] = useState("");
 
   const notify = (m, t = "success") => { setNotif({ m, t }); setTimeout(() => setNotif(null), 3000); };
-  const handleConnect = () => { setConnected(true); setWalletAddr("0x7fA3...b29E"); setWalletBalance("247.50"); notify("Connected to Tempo"); };
+  const handleConnect = async () => { try { if(!window.ethereum) { notify("Please install MetaMask!", "error"); return; } const accounts = await window.ethereum.request({ method: "eth_requestAccounts" }); await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{ chainId: "0x1079", chainName: "Tempo Network", rpcUrls: ["https://rpc.tempo.xyz"], nativeCurrency: { name: "PATHUSD", symbol: "PATHUSD", decimals: 18 }, blockExplorerUrls: ["https://explore.tempo.xyz"] }] }); setConnected(true); setWalletAddr(accounts[0]); notify("Connected to Tempo"); } catch(e) { notify("Connection failed: " + e.message, "error"); } };
   const handleDisconnect = () => { setConnected(false); setWalletAddr(""); setWalletBalance("0.00"); setPage("whales"); notify("Disconnected", "info"); };
 
   const handleMint = async (id) => {
