@@ -168,10 +168,11 @@ useEffect(() => {
   if(!connected || !walletAddr) return;
   const loadData = async () => {
     try {
-      const provider = new BrowserProvider(window.ethereum);
-      const bal = await provider.getBalance(walletAddr);
-      const formatted = parseFloat(formatEther(bal)).toFixed(2);
-      setWalletBalance(formatted);
+const provider = new BrowserProvider(window.ethereum);
+const pathusd = new window.ethers.Contract("0x20c0000000000000000000000000000000000000", ["function balanceOf(address) view returns (uint256)"], provider);
+const bal = await pathusd.balanceOf(walletAddr);
+const formatted = parseFloat(formatEther(bal)).toFixed(2);
+setWalletBalance(formatted);
     } catch(e) { console.log("Balance error:", e); }
   };
   loadData();
