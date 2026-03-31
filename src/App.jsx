@@ -1,4 +1,4 @@
-import { BrowserProvider, formatEther } from "ethers";
+import { BrowserProvider, formatEther, Contract } from "ethers";
 import { useState, useEffect, useRef } from "react";
 
 // WHALEMON TCG — Complete Frontend v2
@@ -169,7 +169,7 @@ useEffect(() => {
   const loadData = async () => {
     try {
 const provider = new BrowserProvider(window.ethereum);
-const pathusd = new window.ethers.Contract("0x20c0000000000000000000000000000000000000", ["function balanceOf(address) view returns (uint256)"], provider);
+const pathusd = new Contract("0x20c0000000000000000000000000000000000000", ["function balanceOf(address) view returns (uint256)"], provider);
 const bal = await pathusd.balanceOf(walletAddr);
 const formatted = parseFloat(formatEther(bal)).toFixed(2);
 setWalletBalance(formatted);
