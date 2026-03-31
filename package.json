@@ -1,0 +1,28 @@
+{
+  "name": "whalemon-oracle",
+  "version": "1.0.0",
+  "description": "Whalemon TCG — AI Oracle Service for card stat generation on Tempo Network",
+  "main": "oracleService.js",
+"scripts": {
+    "start": "node oracleService.cjs",
+    "backfill": "node oracleService.js --backfill",
+    "process": "node oracleService.js --process",
+    "metadata-api": "node metadataApi.js"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.6.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^4.0.6",
+    "@nomicfoundation/hardhat-ignition": "^3.1.0",
+    "@nomicfoundation/hardhat-ignition-ethers": "^3.1.0",
+    "@types/node": "^22.19.15",
+    "ethers": "^6.16.0",
+    "hardhat": "^3.2.0",
+    "typescript": "~5.8.0"
+  },
+  "type": "module"
+}
