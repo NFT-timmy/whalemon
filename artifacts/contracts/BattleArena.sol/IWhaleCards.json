@@ -1,0 +1,94 @@
+{
+  "_format": "hh3-artifact-1",
+  "contractName": "IWhaleCards",
+  "sourceName": "contracts/BattleArena.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "cardId",
+          "type": "uint256"
+        }
+      ],
+      "name": "getCardStats",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint16",
+              "name": "attack",
+              "type": "uint16"
+            },
+            {
+              "internalType": "uint16",
+              "name": "defense",
+              "type": "uint16"
+            },
+            {
+              "internalType": "uint16",
+              "name": "health",
+              "type": "uint16"
+            },
+            {
+              "internalType": "uint16",
+              "name": "speed",
+              "type": "uint16"
+            },
+            {
+              "internalType": "uint8",
+              "name": "element",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint8",
+              "name": "rarity",
+              "type": "uint8"
+            },
+            {
+              "internalType": "bytes32",
+              "name": "abilityHash",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "bool",
+              "name": "isSet",
+              "type": "bool"
+            }
+          ],
+          "internalType": "struct IWhaleCards.CardStats",
+          "name": "",
+          "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "ownerOf",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {},
+  "immutableReferences": {},
+  "inputSourceName": "project/contracts/BattleArena.sol",
+  "buildInfoId": "solc-0_8_28-c96f4ca273027a818c3c20d5e3128ff35d26c4e2"
+}
