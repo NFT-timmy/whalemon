@@ -172,7 +172,7 @@ const loadWhales = async () => {
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
         console.log("[whales] scanning ownerOf for token IDs 0-3333...");
         const ids = [];
-        const batchSize = 50;
+        const batchSize = 5;
         for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
           const checks = [];
           for(let j=start; j<Math.min(start+batchSize,3333); j++){
@@ -182,8 +182,9 @@ const loadWhales = async () => {
           }
           const results = await Promise.all(checks);
           for(const r of results) if(r!==null) ids.push(r);
-          console.log("[whales] scanned", Math.min(start+batchSize,3333), "/ 3333, found", ids.length, "of", bal);
+          if(start % 100 === 0) console.log("[whales] scanned", Math.min(start+batchSize,3333), "/ 3333, found", ids.length, "of", bal);
           if(ids.length>=bal) break;
+          await new Promise(r=>setTimeout(r,200));
         }
         console.log("[whales] owned token IDs:", ids);
         const list=[], minted=new Set();
