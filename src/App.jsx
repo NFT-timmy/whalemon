@@ -55,6 +55,19 @@ function StatBar({ label, value, max, color }) {
   );
 }
 
+function downloadCard(cardId) {
+  const node = document.getElementById(`card-${cardId}`);
+  if (!node) return;
+  import("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js").then(() => {
+    window.html2canvas(node, { useCORS: true, backgroundColor: null, scale: 2 }).then(canvas => {
+      const a = document.createElement("a");
+      a.download = `whalemon-card-${cardId}.png`;
+      a.href = canvas.toDataURL("image/png");
+      a.click();
+    });
+  });
+}
+
 function useImgBg(src) {
   const [bg, setBg] = useState("#0a0e1f");
   useEffect(() => {
@@ -81,7 +94,8 @@ function Card({ card, size="md", onClick }) {
   const lg = size==="lg";
   const imgBg = useImgBg(card.image);
   return (
-    <div onClick={onClick} style={{
+    <div style={{display:"inline-flex",flexDirection:"column",alignItems:"flex-end"}}>
+    <div id={`card-${card.id}`} onClick={onClick} style={{
       width:lg?340:250, borderRadius:14, background:"#0a0e1f",
       border:`1.5px solid ${e.color}30`,
       boxShadow:`0 0 24px ${e.color}0d`,
@@ -117,6 +131,8 @@ function Card({ card, size="md", onClick }) {
           {lg && <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{card.abilityDesc}</div>}
         </div>}
       </div>
+    </div>
+    <button onClick={e=>{e.stopPropagation();downloadCard(card.id);}} title="Download card" style={{marginTop:6,padding:"5px 8px",borderRadius:8,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",color:"#475569",fontSize:14,cursor:"pointer",lineHeight:1}}>↓</button>
     </div>
   );
 }
