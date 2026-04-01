@@ -71,7 +71,7 @@ function Card({ card, size="md", onClick }) {
       {/* rarity stripe */}
       <div style={{height:3,background:RARITY_COLORS[card.rarity]??RARITY_COLORS[0],opacity:.8}}/>
       {/* image */}
-      <div style={{height:lg?280:240,background:`linear-gradient(${e.grad})`,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+      <div style={{height:lg?280:240,background:"#0a0e1f",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
           {card.image
             ? <img src={card.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",objectPosition:"center bottom",position:"absolute",inset:0}} onError={o=>{o.target.style.display="none";o.target.nextSibling.style.display="block";}}/>
             : null}
