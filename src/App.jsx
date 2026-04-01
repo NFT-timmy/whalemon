@@ -471,9 +471,9 @@ const loadWhales = async () => {
             <div className="card-grid">
               {whales.map(w=>(
                 <div key={w.id} style={{width:190,borderRadius:14,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden",transition:"transform .18s"}}>
-                  <div style={{height:160,background:"linear-gradient(135deg,#0c4a6e,#0ea5e9)",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
-                    <img src={w.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>o.target.style.display="none"}/>
-                    <span style={{fontSize:48,position:"relative",zIndex:1}}>🐋</span>
+                  <div style={{height:220,background:"linear-gradient(135deg,#0c4a6e,#0ea5e9)",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+                      <img src={w.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>{o.target.style.display="none";o.target.nextSibling.style.display="block";}}/>
+                      <span style={{fontSize:48,position:"relative",zIndex:1,display:"none"}}>🐋</span>
                     <div style={{position:"absolute",top:8,left:8,padding:"3px 8px",borderRadius:6,background:"rgba(0,0,0,.6)",fontSize:12,color:"#f1f5f9",fontWeight:700,fontFamily:FM}}>#{w.id}</div>
                   </div>
                   <div style={{padding:12}}>
