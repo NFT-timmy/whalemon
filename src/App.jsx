@@ -555,7 +555,7 @@ const loadWhales = async () => {
                 {cards.map(c=><Card key={c.id} card={c} onClick={()=>setPicked(c)}/>)}
               </div>
              {picked && (
-                  <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .2s",padding:20}} onClick={()=>setPicked(null)}>
+                  <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-start",justifyContent:"center",animation:"fadeIn .2s",padding:"60px 20px 20px"}} onClick={()=>setPicked(null)}>
                     <div style={{background:"#0f172a",borderRadius:20,border:"1px solid #1e293b",maxWidth:800,width:"100%",maxHeight:"90vh",overflowY:"auto",animation:"fadeUp .25s"}} onClick={e=>e.stopPropagation()}>
                       {/* Close button */}
                       <div style={{display:"flex",justifyContent:"flex-end",padding:"16px 20px 0"}}>
@@ -565,7 +565,7 @@ const loadWhales = async () => {
                       <div style={{display:"flex",gap:0,flexWrap:"wrap"}}>
                         {/* Left: Large artwork */}
                         <div style={{flex:"1 1 340px",minWidth:280,padding:20}}>
-                          <div style={{borderRadius:14,overflow:"hidden",background:`linear-gradient(${el(picked.element).grad})`,aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+                          <div style={{borderRadius:14,overflow:"hidden",background:`linear-gradient(${el(picked.element).grad})`,aspectRatio:"3/4",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
                             {picked.image
                               ? <img src={picked.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}}/>
                               : <span style={{fontSize:80}}>🐋</span>}
