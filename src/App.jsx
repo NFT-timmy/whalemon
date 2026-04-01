@@ -452,17 +452,23 @@ const loadWhales = async () => {
       const tx = await arena.makeMove(battleId, moveType);
       await tx.wait();
       const battle = await arena.getBattle(battleId);
+      const battleStatus = Number(battle.status);
       const p={...pCard}, o={...oCard}, l=[...bLog], t=bTurn;
       const newPHp = Math.max(0, Number(battle.hp1));
       const newOHp = Math.max(0, Number(battle.hp2));
       p.hp = newPHp; o.hp = newOHp;
       const mvLabel = mv==="atk"?"Attack":mv==="ab"?pCard.ability:"Defend";
       l.push({t, s:`${mvLabel} → Your HP: ${newPHp} / Enemy HP: ${newOHp}`, tp:"p"});
-      if(battle.status===2){ // Finished
+      if(battleStatus===2){ // Finished
         const won = battle.winner.toLowerCase()===addr.toLowerCase();
         const draw = battle.winner==="0x0000000000000000000000000000000000000000";
         const result = draw?"draw":won?"win":"lose";
         l.push({t, s:result==="win"?"Victory! 🏆 Prize awarded!":result==="lose"?"Defeated! 💀":"Draw 🤝", tp:result==="win"?"win":result==="lose"?"lose":"sys"});
+        setPCard(p); setOCard(o); setBLog(l); setBResult(result);
+        await loadBalance();
+      } else if(newPHp<=0||newOHp<=0){
+        const result = newOHp<=0?"win":newPHp<=0?"lose":"draw";
+        l.push({t, s:result==="win"?"Victory! 🏆":result==="lose"?"Defeated! 💀":"Draw 🤝", tp:result==="win"?"win":result==="lose"?"lose":"sys"});
         setPCard(p); setOCard(o); setBLog(l); setBResult(result);
         await loadBalance();
       } else {
