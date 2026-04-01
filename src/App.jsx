@@ -554,29 +554,61 @@ const loadWhales = async () => {
               <div className="card-grid" style={{flex:1}}>
                 {cards.map(c=><Card key={c.id} card={c} onClick={()=>setPicked(c)}/>)}
               </div>
-              {picked && (
-                  <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.85)",backdropFilter:"blur(12px)",display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .2s",padding:20}} onClick={()=>setPicked(null)}>
-                    <div style={{background:"#0f172a",borderRadius:20,border:"1px solid #1e293b",padding:24,maxWidth:380,width:"100%",maxHeight:"90vh",overflowY:"auto",animation:"fadeUp .25s"}} onClick={e=>e.stopPropagation()}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-                        <span style={{fontSize:18,fontWeight:800,color:"#f1f5f9"}}>Whalemon #{picked.id}</span>
-                        <button onClick={()=>setPicked(null)} style={{background:"none",border:"none",color:"#64748b",cursor:"pointer",fontSize:20}}>✕</button>
+             {picked && (
+                  <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .2s",padding:20}} onClick={()=>setPicked(null)}>
+                    <div style={{background:"#0f172a",borderRadius:20,border:"1px solid #1e293b",maxWidth:800,width:"100%",maxHeight:"90vh",overflowY:"auto",animation:"fadeUp .25s"}} onClick={e=>e.stopPropagation()}>
+                      {/* Close button */}
+                      <div style={{display:"flex",justifyContent:"flex-end",padding:"16px 20px 0"}}>
+                        <button onClick={()=>setPicked(null)} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#94a3b8",cursor:"pointer",fontSize:14,padding:"6px 14px",fontFamily:F}}>✕ Close</button>
                       </div>
-                      <Card card={picked} size="lg"/>
-                      <div style={{marginTop:16,padding:14,borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
-                        <div style={{fontSize:11,color:"#475569",textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Total Power</div>
-                        <div style={{fontSize:28,fontWeight:800,color:"#f1f5f9",fontFamily:FM}}>{picked.attack+picked.defense+Math.floor(picked.health/3)+picked.speed}</div>
-                      </div>
-                      <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:16}}>
-                        <button onClick={()=>{toast("List feature coming soon!");}} style={{width:"100%",padding:"12px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>List for Sale</button>
-                        <button onClick={()=>{toast("Send feature coming soon!");}} style={{width:"100%",padding:"12px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Send to Wallet</button>
-                        <button onClick={()=>{toast("Offers feature coming soon!");}} style={{width:"100%",padding:"12px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>View Offers</button>
+                      {/* Two-column layout */}
+                      <div style={{display:"flex",gap:0,flexWrap:"wrap"}}>
+                        {/* Left: Large artwork */}
+                        <div style={{flex:"1 1 340px",minWidth:280,padding:20}}>
+                          <div style={{borderRadius:14,overflow:"hidden",background:`linear-gradient(${el(picked.element).grad})`,aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+                            {picked.image
+                              ? <img src={picked.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}}/>
+                              : <span style={{fontSize:80}}>🐋</span>}
+                          </div>
+                        </div>
+                        {/* Right: Details + Actions */}
+                        <div style={{flex:"1 1 340px",minWidth:280,padding:"20px 24px 24px 4px"}}>
+                          {/* Title */}
+                          <div style={{marginBottom:4}}>
+                            <span style={{fontSize:13,color:el(picked.element).color,fontWeight:600}}>{el(picked.element).icon} {el(picked.element).name}</span>
+                          </div>
+                          <h2 style={{fontSize:28,fontWeight:800,color:"#f1f5f9",marginBottom:4}}>Whalemon #{picked.id}</h2>
+                          <div style={{fontSize:14,color:RARITY_COLORS[picked.rarity],fontWeight:600,marginBottom:20}}>★ {RARITIES[picked.rarity]}</div>
+                          {/* Stats */}
+                          <div style={{padding:16,borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",marginBottom:16}}>
+                            <div style={{fontSize:11,color:"#475569",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Stats</div>
+                            <StatBar label="ATK" value={picked.attack} max={100} color="#f87171"/>
+                            <StatBar label="DEF" value={picked.defense} max={100} color="#60a5fa"/>
+                            <StatBar label="HP" value={picked.health} max={300} color="#4ade80"/>
+                            <StatBar label="SPD" value={picked.speed} max={100} color="#facc15"/>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12,paddingTop:10,borderTop:"1px solid #1e293b"}}>
+                              <span style={{fontSize:12,color:"#475569",textTransform:"uppercase",letterSpacing:1}}>Total Power</span>
+                              <span style={{fontSize:24,fontWeight:800,color:"#f1f5f9",fontFamily:FM}}>{picked.attack+picked.defense+Math.floor(picked.health/3)+picked.speed}</span>
+                            </div>
+                          </div>
+                          {/* Ability */}
+                          <div style={{padding:14,borderRadius:12,background:`${el(picked.element).color}0d`,border:`1px solid ${el(picked.element).color}20`,marginBottom:20}}>
+                            <div style={{fontSize:14,fontWeight:700,color:el(picked.element).color,marginBottom:2}}>{picked.ability||"Ocean Strike"}</div>
+                            <div style={{fontSize:13,color:"#94a3b8"}}>{picked.abilityDesc||"A powerful ocean attack."}</div>
+                          </div>
+                          {/* Action buttons */}
+                          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                            <button onClick={()=>{toast("List feature coming soon!");}} style={{width:"100%",padding:"14px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>List for Sale</button>
+                            <div style={{display:"flex",gap:10}}>
+                              <button onClick={()=>{toast("Send feature coming soon!");}} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Send to Wallet</button>
+                              <button onClick={()=>{toast("Offers feature coming soon!");}} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>View Offers</button>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
-          )}
 
           {/* ── BATTLE ── */}
         {page==="battle" && (
