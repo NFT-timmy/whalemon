@@ -26,6 +26,15 @@ const WHALECARDS_ABI = [
 const PATHUSD_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
+  "function approve(address spender, uint256 amount) external returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+];
+const BATTLE_ABI = [
+  "function createAIBattle(uint256 cardId) external returns (uint256)",
+  "function makeMove(uint256 battleId, uint8 move) external",
+  "function getBattle(uint256 battleId) external view returns (tuple(uint256 battleId,address player1,address player2,uint256 card1,uint256 card2,int16 hp1,int16 hp2,uint8 turn,uint8 lastAbility1,uint8 lastAbility2,bool isPlayer1Turn,uint8 defenseBoost1,uint8 defenseBoost2,uint8 status,uint8 mode,address winner,uint256 createdAt,uint256 finishedAt))",
+  "function entryFee() view returns (uint256)",
+  "function activeBattle(address) view returns (uint256)",
 ];
 
 const ELEMENTS = [
@@ -355,38 +364,117 @@ const loadWhales = async () => {
   };
 
   // ── battle ──────────────────────────────────────────────────────────────────
-  const startBattle = m => { setBMode(m);setBState("select");setBLog([]);setBTurn(1);setBCd(0);setBResult(null);setPCard(null);setOCard(null); };
-  const pickCard = c => {
-    setPCard({...c,hp:c.health});
-    const r=[0,0,1,1,2,2,3][Math.floor(Math.random()*7)],m=[1,1.1,1.25,1.4,1.6][r],
-      hp=Math.round((100+Math.random()*150)*m),eIdx=Math.floor(Math.random()*6);
-    setOCard({id:"AI",element:eIdx,rarity:r,
-      attack:Math.round((30+Math.random()*50)*m),defense:Math.round((30+Math.random()*50)*m),
-      health:hp,speed:Math.round((30+Math.random()*50)*m),
-      ability:["Void Pulse","Riptide Slash","Thunder Breach","Ice Barb","Reef Sting","Crushing Jaw"][eIdx],
-      hp});
-    setBState("fight"); setBLog([{t:0,s:`Battle started! ${bMode==="free"?"(Practice)":"(Ranked)"}`,tp:"sys"}]);
-  };
+  const [battleId,setBattleId] = useState(null);
+  const [bPending,setBPending] = useState(false);
+
+  const startBattle = m => { setBMode(m);setBState("select");setBLog([]);setBTurn(1);setBCd(0);setBResult(null);setPCard(null);setOCard(null);setBattleId(null); };
+
   const adv=(a,d)=>({0:3,3:4,4:1,1:5,5:2,2:0}[a]===d);
   const calcDmg=(a,d,ab,adv_)=>Math.max(5,Math.round((a.attack*100/(100+d.defense))*(ab?1.8:1)*(adv_?1.5:1)*(0.9+Math.random()*.2)));
+
+  const pickCard = async c => {
+    if(bMode==="free"){
+      setPCard({...c,hp:c.health});
+      const r=[0,0,1,1,2,2,3][Math.floor(Math.random()*7)],m=[1,1.1,1.25,1.4,1.6][r],
+        hp=Math.round((100+Math.random()*150)*m),eIdx=Math.floor(Math.random()*6);
+      setOCard({id:"AI",element:eIdx,rarity:r,
+        attack:Math.round((30+Math.random()*50)*m),defense:Math.round((30+Math.random()*50)*m),
+        health:hp,speed:Math.round((30+Math.random()*50)*m),
+        ability:["Void Pulse","Riptide Slash","Thunder Breach","Ice Barb","Reef Sting","Crushing Jaw"][eIdx],
+        hp});
+      setBState("fight"); setBLog([{t:0,s:"Battle started! (Practice)",tp:"sys"}]);
+      return;
+    }
+    // ranked-ai — on-chain
+    setBPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const pathusd = new Contract(CONTRACTS.PATHUSD, PATHUSD_ABI, signer);
+      const arena   = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+      const fee     = await arena.entryFee();
+      if(fee > 0n){
+        const allowance = await pathusd.allowance(addr, CONTRACTS.BATTLE_ARENA);
+        if(allowance < fee){
+          toast("Approving PATHUSD…","info");
+          const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, fee);
+          await approveTx.wait();
+        }
+      }
+      toast("Creating battle on-chain…","info");
+      const tx = await arena.createAIBattle(c.id);
+      const receipt = await tx.wait();
+      const event = receipt.logs.map(log=>{ try{ return arena.interface.parseLog(log); }catch(_){return null;} }).find(e=>e&&e.name==="BattleCreated");
+      const bid = event ? event.args.battleId : await arena.activeBattle(addr);
+      setBattleId(bid);
+      const battle = await arena.getBattle(bid);
+      const aiHp = Number(battle.hp2);
+      const aiEl = Math.floor(Math.random()*6);
+      setPCard({...c, hp:c.health});
+      setOCard({id:"AI",element:aiEl,rarity:1,attack:50,defense:40,health:aiHp,speed:40,ability:"AI Strike",abilityDesc:"The AI attacks.",hp:aiHp});
+      setBState("fight"); setBLog([{t:0,s:"Ranked AI battle started! 1 PATHUSD entry fee paid.",tp:"sys"}]);
+    } catch(e){
+      console.error("createAIBattle",e);
+      toast("Battle start failed: "+(e.reason||e.message||"Unknown"),"err");
+    }
+    setBPending(false);
+  };
+
   const doMove = async mv => {
     if(!pCard||!oCard||bResult) return;
-    const p={...pCard},o={...oCard},l=[...bLog]; let cd=bCd,t=bTurn;
-    const pa=adv(p.element,o.element);
-    if(mv==="atk"){ const d=calcDmg(p,o,false,pa); o.hp-=d; l.push({t,s:`Attack: ${d} dmg${pa?" ⚡":""}`,tp:"p"}); }
-    else if(mv==="ab"){ if(cd>0) return; const d=calcDmg(p,o,true,pa); o.hp-=d; cd=3; l.push({t,s:`${p.ability}: ${d} dmg${pa?" ⚡":""}`,tp:"pa"}); }
-    else { l.push({t,s:"Defend! (50% reduction next hit)",tp:"pd"}); }
-    if(o.hp<=0){ o.hp=0; l.push({t,s:"Enemy defeated! Victory! 🏆",tp:"win"}); setPCard(p);setOCard(o);setBLog(l);setBResult("win"); return; }
-    await new Promise(r=>setTimeout(r,500));
-    const oa=adv(o.element,p.element),roll=Math.random();
-    if(o.hp<o.health*.3&&roll<.3) l.push({t,s:"Enemy defends!",tp:"od"});
-    else if(roll<.35){ let d=calcDmg(o,p,true,oa); if(mv==="def") d=Math.round(d/2); p.hp-=d; l.push({t,s:`Enemy ${o.ability}: ${d} dmg${oa?" ⚡":""}`,tp:"oa"}); }
-    else { let d=calcDmg(o,p,false,oa); if(mv==="def") d=Math.round(d/2); p.hp-=d; l.push({t,s:`Enemy attacks: ${d} dmg${oa?" ⚡":""}`,tp:"o"}); }
-    if(p.hp<=0){ p.hp=0; l.push({t,s:"Defeated! 💀",tp:"lose"}); setBResult("lose"); }
-    if(t>=30&&!bResult){ const r=p.hp>o.hp?"win":p.hp<o.hp?"lose":"draw"; l.push({t,s:`Max turns — ${r}!`,tp:"sys"}); setBResult(r); }
-    setPCard(p); setOCard(o); setBLog(l); setBTurn(t+1); setBCd(Math.max(0,cd-1));
+    if(bMode==="free"){
+      const p={...pCard},o={...oCard},l=[...bLog]; let cd=bCd,t=bTurn;
+      const pa=adv(p.element,o.element);
+      if(mv==="atk"){ const d=calcDmg(p,o,false,pa); o.hp-=d; l.push({t,s:`Attack: ${d} dmg${pa?" ⚡":""}`,tp:"p"}); }
+      else if(mv==="ab"){ if(cd>0) return; const d=calcDmg(p,o,true,pa); o.hp-=d; cd=3; l.push({t,s:`${p.ability}: ${d} dmg${pa?" ⚡":""}`,tp:"pa"}); }
+      else { l.push({t,s:"Defend! (50% reduction next hit)",tp:"pd"}); }
+      if(o.hp<=0){ o.hp=0; l.push({t,s:"Enemy defeated! Victory! 🏆",tp:"win"}); setPCard(p);setOCard(o);setBLog(l);setBResult("win"); return; }
+      await new Promise(r=>setTimeout(r,500));
+      const oa=adv(o.element,p.element),roll=Math.random();
+      if(o.hp<o.health*.3&&roll<.3) l.push({t,s:"Enemy defends!",tp:"od"});
+      else if(roll<.35){ let d=calcDmg(o,p,true,oa); if(mv==="def") d=Math.round(d/2); p.hp-=d; l.push({t,s:`Enemy ${o.ability}: ${d} dmg${oa?" ⚡":""}`,tp:"oa"}); }
+      else { let d=calcDmg(o,p,false,oa); if(mv==="def") d=Math.round(d/2); p.hp-=d; l.push({t,s:`Enemy attacks: ${d} dmg${oa?" ⚡":""}`,tp:"o"}); }
+      if(p.hp<=0){ p.hp=0; l.push({t,s:"Defeated! 💀",tp:"lose"}); setBResult("lose"); }
+      if(t>=30&&!bResult){ const r=p.hp>o.hp?"win":p.hp<o.hp?"lose":"draw"; l.push({t,s:`Max turns — ${r}!`,tp:"sys"}); setBResult(r); }
+      setPCard(p); setOCard(o); setBLog(l); setBTurn(t+1); setBCd(Math.max(0,cd-1));
+      return;
+    }
+    // ranked-ai — on-chain
+    if(!battleId) return;
+    setBPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+      const moveType = mv==="atk"?0:mv==="ab"?1:2;
+      const tx = await arena.makeMove(battleId, moveType);
+      await tx.wait();
+      const battle = await arena.getBattle(battleId);
+      const p={...pCard}, o={...oCard}, l=[...bLog], t=bTurn;
+      const newPHp = Math.max(0, Number(battle.hp1));
+      const newOHp = Math.max(0, Number(battle.hp2));
+      p.hp = newPHp; o.hp = newOHp;
+      const mvLabel = mv==="atk"?"Attack":mv==="ab"?pCard.ability:"Defend";
+      l.push({t, s:`${mvLabel} → Your HP: ${newPHp} / Enemy HP: ${newOHp}`, tp:"p"});
+      if(battle.status===3){ // Finished
+        const won = battle.winner.toLowerCase()===addr.toLowerCase();
+        const draw = battle.winner==="0x0000000000000000000000000000000000000000";
+        const result = draw?"draw":won?"win":"lose";
+        l.push({t, s:result==="win"?"Victory! 🏆 Prize awarded!":result==="lose"?"Defeated! 💀":"Draw 🤝", tp:result==="win"?"win":result==="lose"?"lose":"sys"});
+        setPCard(p); setOCard(o); setBLog(l); setBResult(result);
+        await loadBalance();
+      } else {
+        setPCard(p); setOCard(o); setBLog(l); setBTurn(t+1);
+        if(mv==="ab") setBCd(3); else setBCd(c=>Math.max(0,c-1));
+      }
+    } catch(e){
+      console.error("makeMove",e);
+      toast("Move failed: "+(e.reason||e.message||"Unknown"),"err");
+    }
+    setBPending(false);
   };
-  const exitBattle=()=>{setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);};
+
+  const exitBattle=()=>{setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);setBattleId(null);};
   const logColor=tp=>tp?.includes("win")?"#4ade80":tp?.includes("lose")?"#f87171":tp?.startsWith("p")?"#38bdf8":tp?.startsWith("o")?"#f59e0b":"#64748b";
 
   // ── css ──────────────────────────────────────────────────────────────────────
