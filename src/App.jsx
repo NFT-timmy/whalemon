@@ -10,9 +10,10 @@ const CONTRACTS = {
   PATHUSD:     "0x20c0000000000000000000000000000000000000",
 };
 const WHEL_ABI = [
-  "function balanceOf(address) view returns (uint256)",
-  "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
-];
+    "function balanceOf(address) view returns (uint256)",
+    "function tokenURI(uint256) view returns (string)",
+    "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+  ];
 const WHALECARDS_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
@@ -159,29 +160,53 @@ export default function WhalemonTCG() {
     } catch(e){ console.warn("balance",e); }
   };
 
-  const loadWhales = async () => {
-    setLoadingW(true);
-    try {
-      const prov   = await ensureTempo();
-      const whel   = new Contract(CONTRACTS.WHEL_NFT,   WHEL_ABI,      prov);
-      const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
-      const bal    = Number(await whel.balanceOf(addr));
-      console.log("[whales] balance",bal);
-      const list=[], minted=new Set();
-      for(let i=0;i<bal;i++){
-        try {
-          const id = Number(await whel.tokenOfOwnerByIndex(addr,i));
+const loadWhales = async () => {
+      setLoadingW(true);
+      try {
+        const prov   = await ensureTempo();
+        const whel   = new Contract(CONTRACTS.WHEL_NFT,   WHEL_ABI,      prov);
+        const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
+        const bal    = Number(await whel.balanceOf(addr));
+        console.log("[whales] balance",bal);
+        if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
+        const filterIn  = whel.filters.Transfer(null, addr);
+        const filterOut = whel.filters.Transfer(addr, null);
+        const [logsIn, logsOut] = await Promise.all([
+          whel.queryFilter(filterIn, 0, "latest"),
+          whel.queryFilter(filterOut, 0, "latest"),
+        ]);
+        console.log("[whales] transfer logs in:", logsIn.length, "out:", logsOut.length);
+        const owned = new Map();
+        for(const log of logsIn)  owned.set(Number(log.args.tokenId), true);
+        for(const log of logsOut) owned.delete(Number(log.args.tokenId));
+        const ids = [...owned.keys()];
+        console.log("[whales] owned token IDs:", ids);
+        const list=[], minted=new Set();
+        for(const id of ids){
+          let img = nftImg(id);
+          try {
+            const uri = await whel.tokenURI(id);
+            if(uri.startsWith("data:application/json")){
+              const json = uri.startsWith("data:application/json;base64,")
+                ? JSON.parse(atob(uri.split(",")[1]))
+                : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+              if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+            } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
+              const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
+              const resp = await fetch(fetchUrl);
+              const json = await resp.json();
+              if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+            }
+          } catch(e){ console.warn("tokenURI failed for",id,e); }
           let minted_ = false;
           try{ minted_ = await wCards.hasMinted(id); }catch(_){}
           if(minted_) minted.add(id);
-          list.push({id, image:nftImg(id)});
-        } catch(e){ console.warn("whale slot",i,e); }
-      }
-      setWhales(list); setMintedIds(minted);
-      if(bal===0) toast("No WHEL NFTs found on Tempo Network","info");
-    } catch(e){ console.error("loadWhales",e); toast("Could not load WHEL NFTs — check you're on Tempo","err"); }
-    setLoadingW(false);
-  };
+          list.push({id, image:img});
+        }
+        setWhales(list); setMintedIds(minted);
+      } catch(e){ console.error("loadWhales",e); toast("Could not load WHEL NFTs \u2014 check you're on Tempo","err"); }
+      setLoadingW(false);
+    };
 
   const loadCards = async () => {
     setLoadingC(true);
