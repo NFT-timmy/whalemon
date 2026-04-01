@@ -574,8 +574,11 @@ const loadWhales = async () => {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
 
-        {/* ── BATTLE ── */}
+          {/* ── BATTLE ── */}
         {page==="battle" && (
           <div className="page">
             {!bState && (
