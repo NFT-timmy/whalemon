@@ -73,7 +73,7 @@ function Card({ card, size="md", onClick }) {
       {/* image */}
       <div style={{height:lg?280:240,background:`linear-gradient(${e.grad})`,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
           {card.image
-            ? <img src={card.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>{o.target.style.display="none";o.target.nextSibling.style.display="block";}}/>
+            ? <img src={card.image} alt="" style={{width:"100%",height:"100%",objectFit:"contain",objectPosition:"center center",position:"absolute",inset:0,background:"inherit"}} onError={o=>{o.target.style.display="none";o.target.nextSibling.style.display="block";}}/>
             : null}
           <span style={{fontSize:lg?52:36,position:"relative",zIndex:1,display:card.image?"none":"block"}}>🐋</span>
         <div style={{position:"absolute",top:8,right:8,padding:"2px 8px",borderRadius:20,background:"rgba(0,0,0,.55)",fontSize:11,color:e.color,fontWeight:700}}>{e.icon} {e.name}</div>
