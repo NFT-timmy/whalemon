@@ -18,7 +18,7 @@ const WHEL_ABI = [
 const WHALECARDS_ABI = [
     "function balanceOf(address) view returns (uint256)",
     "function ownerOf(uint256) view returns (address)",
-    "function getCard(uint256) view returns (uint8,uint8,uint16,uint16,uint16,uint16,string,string)",
+    "function getCardStats(uint256) view returns (uint16,uint16,uint16,uint16,uint8,uint8,bytes32,bool)",
     "function hasMinted(uint256) view returns (bool)",
     "function mintCard(uint256) external",
     "event CardMinted(address indexed owner, uint256 indexed whaleId, uint256 indexed cardId)",
@@ -257,10 +257,12 @@ const loadWhales = async () => {
                 if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
               }
             } catch(e){ console.warn("card tokenURI failed for",id,e); }
-            const raw  = await wCards.getCard(id);
-            list.push({id,image:img,element:Number(raw[0]),rarity:Number(raw[1]),
-              attack:Number(raw[2]),defense:Number(raw[3]),health:Number(raw[4]),speed:Number(raw[5]),
-              ability:raw[6]||"Ocean Strike",abilityDesc:raw[7]||"A powerful attack."});
+            const raw  = await wCards.getCardStats(id);
+            const isSet = raw[7];
+            list.push({id,image:img,element:Number(raw[4]),rarity:Number(raw[5]),
+              attack:Number(raw[0]),defense:Number(raw[1]),health:Number(raw[2]),speed:Number(raw[3]),
+              ability:isSet?"Ocean Strike":"Awaiting stats...",abilityDesc:isSet?"A powerful ocean attack.":"Oracle is generating stats.",
+              statsReady:isSet});
           } catch(e){ console.warn("card load",id,e); }
         }
         setCards(list);
