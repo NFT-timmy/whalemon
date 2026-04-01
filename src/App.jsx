@@ -169,11 +169,14 @@ const loadWhales = async () => {
         const bal    = Number(await whel.balanceOf(addr));
         console.log("[whales] balance",bal);
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
-        const filterIn  = whel.filters.Transfer(null, addr);
+const filterIn  = whel.filters.Transfer(null, addr);
         const filterOut = whel.filters.Transfer(addr, null);
+        const currentBlock = await prov.getBlockNumber();
+        const fromBlock = Math.max(0, currentBlock - 90000);
+        console.log("[whales] scanning blocks", fromBlock, "to", currentBlock);
         const [logsIn, logsOut] = await Promise.all([
-          whel.queryFilter(filterIn, 0, "latest"),
-          whel.queryFilter(filterOut, 0, "latest"),
+          whel.queryFilter(filterIn, fromBlock, "latest"),
+          whel.queryFilter(filterOut, fromBlock, "latest"),
         ]);
         console.log("[whales] transfer logs in:", logsIn.length, "out:", logsOut.length);
         const owned = new Map();
