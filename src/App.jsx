@@ -11,6 +11,7 @@ const CONTRACTS = {
 };
 const WHEL_ABI = [
     "function balanceOf(address) view returns (uint256)",
+    "function ownerOf(uint256) view returns (address)",
     "function tokenURI(uint256) view returns (string)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ];
@@ -169,20 +170,21 @@ const loadWhales = async () => {
         const bal    = Number(await whel.balanceOf(addr));
         console.log("[whales] balance",bal);
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
-const filterIn  = whel.filters.Transfer(null, addr);
-        const filterOut = whel.filters.Transfer(addr, null);
-        const currentBlock = await prov.getBlockNumber();
-        const fromBlock = Math.max(0, currentBlock - 90000);
-        console.log("[whales] scanning blocks", fromBlock, "to", currentBlock);
-        const [logsIn, logsOut] = await Promise.all([
-          whel.queryFilter(filterIn, fromBlock, "latest"),
-          whel.queryFilter(filterOut, fromBlock, "latest"),
-        ]);
-        console.log("[whales] transfer logs in:", logsIn.length, "out:", logsOut.length);
-        const owned = new Map();
-        for(const log of logsIn)  owned.set(Number(log.args.tokenId), true);
-        for(const log of logsOut) owned.delete(Number(log.args.tokenId));
-        const ids = [...owned.keys()];
+        console.log("[whales] scanning ownerOf for token IDs 0-3333...");
+        const ids = [];
+        const batchSize = 50;
+        for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
+          const checks = [];
+          for(let j=start; j<Math.min(start+batchSize,3333); j++){
+            checks.push(
+              whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+            );
+          }
+          const results = await Promise.all(checks);
+          for(const r of results) if(r!==null) ids.push(r);
+          console.log("[whales] scanned", Math.min(start+batchSize,3333), "/ 3333, found", ids.length, "of", bal);
+          if(ids.length>=bal) break;
+        }
         console.log("[whales] owned token IDs:", ids);
         const list=[], minted=new Set();
         for(const id of ids){
