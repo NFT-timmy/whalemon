@@ -395,7 +395,8 @@ const loadWhales = async () => {
       const fee     = await arena.entryFee();
       if(fee > 0n){
         const allowance = await pathusd.allowance(addr, CONTRACTS.BATTLE_ARENA);
-        const approveAmount = 10n * 10n**18n;
+        const decimals = await pathusd.decimals();
+        const approveAmount = 10n * (10n ** BigInt(decimals));
         if(allowance < fee){
           toast("Approving PATHUSD…","info");
           const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, approveAmount);
