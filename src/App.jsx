@@ -16,12 +16,13 @@ const WHEL_ABI = [
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ];
 const WHALECARDS_ABI = [
-  "function balanceOf(address) view returns (uint256)",
-  "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
-  "function getCard(uint256) view returns (uint8,uint8,uint16,uint16,uint16,uint16,string,string)",
-  "function hasMinted(uint256) view returns (bool)",
-  "function mintCard(uint256) external",
-];
+    "function balanceOf(address) view returns (uint256)",
+    "function ownerOf(uint256) view returns (address)",
+    "function getCard(uint256) view returns (uint8,uint8,uint16,uint16,uint16,uint16,string,string)",
+    "function hasMinted(uint256) view returns (bool)",
+    "function mintCard(uint256) external",
+    "event CardMinted(address indexed owner, uint256 indexed whaleId, uint256 indexed cardId)",
+  ];
 const PATHUSD_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
@@ -219,18 +220,50 @@ const loadWhales = async () => {
     try {
       const prov   = await ensureTempo();
       const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
-      const bal    = Number(await wCards.balanceOf(addr));
-      const list=[];
-      for(let i=0;i<bal;i++){
-        try {
-          const id   = Number(await wCards.tokenOfOwnerByIndex(addr,i));
-          const raw  = await wCards.getCard(id);
-          list.push({id,image:nftImg(id),element:Number(raw[0]),rarity:Number(raw[1]),
-            attack:Number(raw[2]),defense:Number(raw[3]),health:Number(raw[4]),speed:Number(raw[5]),
-            ability:raw[6]||"Ocean Strike",abilityDesc:raw[7]||"A powerful attack."});
-        } catch(e){ console.warn("card slot",i,e); }
-      }
-      setCards(list);
+        const whel   = new Contract(CONTRACTS.WHEL_NFT,WHEL_ABI,prov);
+        const bal    = Number(await wCards.balanceOf(addr));
+        console.log("[cards] balance",bal);
+        if(bal===0){ setCards([]); setLoadingC(false); return; }
+        const ids = [];
+        const batchSize = 5;
+        for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
+          const checks = [];
+          for(let j=start; j<Math.min(start+batchSize,3333); j++){
+            checks.push(
+              wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+            );
+          }
+          const results = await Promise.all(checks);
+          for(const r of results) if(r!==null) ids.push(r);
+          if(ids.length>=bal) break;
+          await new Promise(r=>setTimeout(r,200));
+        }
+        console.log("[cards] owned card IDs:", ids);
+        const list=[];
+        for(const id of ids){
+          try {
+            let img = nftImg(id);
+            try {
+              const uri = await whel.tokenURI(id);
+              if(uri.startsWith("data:application/json")){
+                const json = uri.startsWith("data:application/json;base64,")
+                  ? JSON.parse(atob(uri.split(",")[1]))
+                  : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+              } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
+                const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
+                const resp = await fetch(fetchUrl);
+                const json = await resp.json();
+                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+              }
+            } catch(e){ console.warn("card tokenURI failed for",id,e); }
+            const raw  = await wCards.getCard(id);
+            list.push({id,image:img,element:Number(raw[0]),rarity:Number(raw[1]),
+              attack:Number(raw[2]),defense:Number(raw[3]),health:Number(raw[4]),speed:Number(raw[5]),
+              ability:raw[6]||"Ocean Strike",abilityDesc:raw[7]||"A powerful attack."});
+          } catch(e){ console.warn("card load",id,e); }
+        }
+        setCards(list);
     } catch(e){ console.error("loadCards",e); }
     setLoadingC(false);
   };
@@ -262,8 +295,9 @@ const loadWhales = async () => {
       toast("Minted! Oracle is generating stats…");
       await new Promise(r=>setTimeout(r,5000));
       await loadCards(); await loadBalance();
-      const fresh = cards.find(c=>c.id===whaleId) || {
-        id:whaleId,image:nftImg(whaleId),
+      const whaleData = whales.find(w=>w.id===whaleId);
+        const fresh = cards.find(c=>c.id===whaleId) || {
+          id:whaleId,image:whaleData?.image||nftImg(whaleId),
         element:Math.floor(Math.random()*6),
         rarity:[0,0,0,1,1,2,2,3,4][Math.floor(Math.random()*9)],
         attack:30+Math.floor(Math.random()*60),defense:30+Math.floor(Math.random()*60),
