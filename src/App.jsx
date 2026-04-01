@@ -458,7 +458,7 @@ const loadWhales = async () => {
       p.hp = newPHp; o.hp = newOHp;
       const mvLabel = mv==="atk"?"Attack":mv==="ab"?pCard.ability:"Defend";
       l.push({t, s:`${mvLabel} → Your HP: ${newPHp} / Enemy HP: ${newOHp}`, tp:"p"});
-      if(battle.status===3){ // Finished
+      if(battle.status===2){ // Finished
         const won = battle.winner.toLowerCase()===addr.toLowerCase();
         const draw = battle.winner==="0x0000000000000000000000000000000000000000";
         const result = draw?"draw":won?"win":"lose";
