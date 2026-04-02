@@ -36,6 +36,7 @@ const BATTLE_ABI = [
   "function entryFee() view returns (uint256)",
   "function activeBattle(address) view returns (uint256)",
   "function forfeitBattle(uint256 battleId) external",
+"function abandonBattle(uint256 battleId) external",
 ];
 
 const ELEMENTS = [
@@ -178,6 +179,8 @@ export default function WhalemonTCG() {
   const [bTurn,setBTurn]           = useState(1);
   const [bCd,setBCd]               = useState(0);
   const [bResult,setBResult]       = useState(null);
+const [resumeBattle, setResumeBattle] = useState(null);
+const [activeBattleId, setActiveBattleId] = useState(null);
 
   const toast = (m,t="ok") => { setNotif({m,t}); setTimeout(()=>setNotif(null),3500); };
 
@@ -325,6 +328,17 @@ const loadWhales = async () => {
       const prov  = await ensureTempo();
       setProvider(prov); setAddr(acc); setConnected(true);
       toast("Connected to Tempo ✓");
+      // Check for active battle
+      try {
+        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+        const battleId = await arena.activeBattle(acc);
+        if(Number(battleId) > 0) {
+          const battle = await arena.getBattle(battleId);
+          if(battle.status === 1n) { // Active
+            setResumeBattle({ battleId: Number(battleId), battle });
+          }
+        }
+      } catch(e){ console.log("active battle check", e); }
     } catch(e){ alert("Connect failed: "+e.message); }
   };
 
@@ -574,6 +588,49 @@ const loadWhales = async () => {
     <div style={{minHeight:"100vh",background:"#020817",fontFamily:F,display:"flex",flexDirection:"column"}}>
       <style>{css}</style>
 
+{resumeBattle && (
+  <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(2,8,23,.95)",backdropFilter:"blur(16px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",animation:"fadeIn .3s"}}>
+    <div style={{background:"#0a0e1f",borderRadius:20,border:"1px solid #1e293b",padding:36,maxWidth:420,width:"90%",textAlign:"center"}}>
+      <div style={{fontSize:48,marginBottom:16}}>⚔️</div>
+      <h2 style={{fontSize:22,fontWeight:700,color:"#f1f5f9",marginBottom:8}}>Active Battle Found</h2>
+      <p style={{fontSize:14,color:"#64748b",marginBottom:24}}>You have an unfinished ranked battle (Turn {Number(resumeBattle.battle.turn)}). Resume or abandon it.</p>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+        <div style={{padding:"12px",borderRadius:12,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)"}}>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>Your HP</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#4ade80",fontFamily:FM}}>{Number(resumeBattle.battle.hp1)}</div>
+        </div>
+        <div style={{padding:"12px",borderRadius:12,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)"}}>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>Enemy HP</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#f87171",fontFamily:FM}}>{Number(resumeBattle.battle.hp2)}</div>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={async()=>{
+          try {
+            const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, await provider.getSigner());
+            const card = cards.find(c=>c.id===Number(resumeBattle.battle.card1)) || {id:Number(resumeBattle.battle.card1),element:0,rarity:0,attack:50,defense:50,health:Number(resumeBattle.battle.hp1),speed:50,ability:"Ocean Strike",abilityDesc:"A powerful attack."};
+            setPCard({...card,hp:Number(resumeBattle.battle.hp1)});
+            setOCard({id:"AI",element:0,rarity:0,attack:50,defense:50,health:200,speed:50,ability:"AI Strike",abilityDesc:"",hp:Number(resumeBattle.battle.hp2)});
+            setBState("fight"); setBMode("ranked-ai");
+            setBTurn(Number(resumeBattle.battle.turn));
+            setActiveBattleId(Number(resumeBattle.battleId));
+            setResumeBattle(null);
+            toast("Battle resumed!");
+          } catch(e){ toast("Failed to resume: "+e.message,"err"); }
+        }} style={{flex:1,padding:"12px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>▶ Resume Battle</button>
+        <button onClick={async()=>{
+          try {
+            const signer = await provider.getSigner();
+            const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+            await arena.abandonBattle(Number(resumeBattle.battleId));
+            toast("Battle abandoned — recorded as a loss.");
+            setResumeBattle(null);
+          } catch(e){ toast("Failed to abandon: "+e.message,"err"); }
+        }} style={{flex:1,padding:"12px",borderRadius:10,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.3)",color:"#f87171",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>✕ Abandon (Loss)</button>
+      </div>
+    </div>
+  </div>
+)}
       {/* toast */}
       {notif && <div style={{position:"fixed",top:16,right:16,zIndex:2000,padding:"12px 18px",borderRadius:10,
         background:notif.t==="err"?"#450a0a":notif.t==="info"?"#0c1a2e":"#042f1e",
