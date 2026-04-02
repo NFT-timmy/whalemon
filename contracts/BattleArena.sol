@@ -78,6 +78,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
         address winner;
         uint256 createdAt;
         uint256 finishedAt;
+        uint256 lastMoveAt;
     }
 
     struct BattleLog {
@@ -122,6 +123,9 @@ contract BattleArena is Ownable, ReentrancyGuard {
     uint256 public seasonStart;
     uint256 public seasonDuration = 30 days;
 
+    /// @notice Inactivity timeout in seconds — default 30 minutes, adjustable by owner
+    uint256 public inactivityTimeout = 30 minutes;
+
     /// @notice Number of top tier players with individual prize shares
     uint256 public topTierCount;
 
@@ -149,10 +153,12 @@ contract BattleArena is Ownable, ReentrancyGuard {
     event BattleCancelled(uint256 indexed battleId);
     event BattleForfeited(uint256 indexed battleId, address indexed forfeiter);
     event BattleAbandoned(uint256 indexed battleId, address indexed abandoner);
+    event InactivityClaimed(uint256 indexed battleId, address indexed claimant, address indexed inactive);
     event EntryFeePaid(address indexed player, uint256 amount, uint256 toPool, uint256 toPlatform);
     event SeasonEnded(uint256 indexed season, uint256 prizePool, address[] topPlayers);
     event PrizeClaimed(uint256 indexed season, uint256 rank, address indexed player, uint256 amount);
     event EntryFeeUpdated(uint256 oldFee, uint256 newFee);
+    event InactivityTimeoutUpdated(uint256 oldTimeout, uint256 newTimeout);
     event EmergencyWithdraw(address indexed to, uint256 amount);
 
     /* ═══════════════════════════════════════════════════ */
@@ -179,6 +185,8 @@ contract BattleArena is Ownable, ReentrancyGuard {
     error InvalidFee();
     error ForfeitNotAllowed();
     error NothingToWithdraw();
+    error InactivityNotReached();
+    error NotOpponent();
 
     /* ═══════════════════════════════════════════════════ */
     /*                   CONSTRUCTOR                      */
@@ -248,7 +256,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
             turn: 0, lastAbility1: 0, lastAbility2: 0, isPlayer1Turn: true,
             defenseBoost1: 0, defenseBoost2: 0, status: BattleStatus.Open,
             mode: BattleMode.PvP, winner: address(0),
-            createdAt: block.timestamp, finishedAt: 0
+            createdAt: block.timestamp, finishedAt: 0, lastMoveAt: block.timestamp
         });
         activeBattle[msg.sender] = battleId;
         emit BattleCreated(battleId, msg.sender, cardId, BattleMode.PvP);
@@ -269,7 +277,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
             turn: 1, lastAbility1: 0, lastAbility2: 0, isPlayer1Turn: true,
             defenseBoost1: 0, defenseBoost2: 0, status: BattleStatus.Active,
             mode: BattleMode.AI, winner: address(0),
-            createdAt: block.timestamp, finishedAt: 0
+            createdAt: block.timestamp, finishedAt: 0, lastMoveAt: block.timestamp
         });
         activeBattle[msg.sender] = battleId;
         emit BattleCreated(battleId, msg.sender, cardId, BattleMode.AI);
@@ -289,6 +297,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
         battle.hp2 = int16(stats.health);
         battle.status = BattleStatus.Active;
         battle.turn = 1;
+        battle.lastMoveAt = block.timestamp;
         IWhaleCards.CardStats memory stats1 = whaleCards.getCardStats(battle.card1);
         battle.isPlayer1Turn = stats1.speed >= stats.speed;
         activeBattle[msg.sender] = battleId;
@@ -311,6 +320,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
             if (isPlayer2 && battle.isPlayer1Turn) revert NotYourTurn();
         }
         uint16 damage = _executeMove(battle, isPlayer1, move);
+        battle.lastMoveAt = block.timestamp;
         battleLogs[battleId].push(BattleLog({
             turn: battle.turn, player: msg.sender, move: move, damage: damage,
             hp1After: battle.hp1, hp2After: battle.hp2
@@ -349,7 +359,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
     }
 
     /// @notice Forfeit an active battle — only allowed on turn 1 or 2
-    /// @dev Battle cancelled, full refund to all players, no win/loss recorded.
+    /// @dev Full refund to all players, no win/loss recorded.
     function forfeitBattle(uint256 battleId) external nonReentrant {
         Battle storage battle = battles[battleId];
         bool isPlayer1 = msg.sender == battle.player1;
@@ -378,7 +388,6 @@ contract BattleArena is Ownable, ReentrancyGuard {
     }
 
     /// @notice Abandon a battle after turn 2 — counts as a loss, no refund
-    /// @dev Used when player disconnects or wants to exit after forfeit is locked.
     function abandonBattle(uint256 battleId) external nonReentrant {
         Battle storage battle = battles[battleId];
         bool isPlayer1 = msg.sender == battle.player1;
@@ -407,6 +416,61 @@ contract BattleArena is Ownable, ReentrancyGuard {
         totalBattlesPlayed++;
         emit BattleAbandoned(battleId, msg.sender);
         emit BattleFinished(battleId, battle.winner, battle.turn);
+    }
+
+    /* ═══════════════════════════════════════════════════ */
+    /*               INACTIVITY CLAIM                     */
+    /* ═══════════════════════════════════════════════════ */
+
+    /// @notice Claim a win or refund if opponent has been inactive past the timeout
+    /// @dev If within safe zone (turn <= 2): both players refunded, no record.
+    ///      If past safe zone (turn > 2): inactive player loses, claimant wins.
+    ///      Only the active (non-inactive) player can call this.
+    function claimInactivityWin(uint256 battleId) external nonReentrant {
+        Battle storage battle = battles[battleId];
+        if (battle.status != BattleStatus.Active) revert BattleNotActive();
+
+        bool isPlayer1 = msg.sender == battle.player1;
+        bool isPlayer2 = msg.sender == battle.player2;
+        if (!isPlayer1 && !isPlayer2) revert NotBattleParticipant();
+
+        // Check inactivity timeout has passed
+        if (block.timestamp < battle.lastMoveAt + inactivityTimeout) revert InactivityNotReached();
+
+        // In PvP: claimant must be the one whose turn it is NOT (i.e. they are waiting)
+        // In AI: only player1 can claim (AI can't be inactive)
+        if (battle.mode == BattleMode.PvP) {
+            if (isPlayer1 && battle.isPlayer1Turn) revert NotOpponent(); // it's player1's turn, they're the inactive one
+            if (isPlayer2 && !battle.isPlayer1Turn) revert NotOpponent(); // it's player2's turn, they're the inactive one
+        }
+
+        battle.finishedAt = block.timestamp;
+
+        if (battle.turn <= 2) {
+            // Safe zone — full refund to both, no record
+            battle.status = BattleStatus.Cancelled;
+            activeBattle[battle.player1] = 0;
+            if (battle.player2 != address(this)) activeBattle[battle.player2] = 0;
+            _refundEntryFee(battle.player1);
+            if (battle.mode == BattleMode.PvP && battle.player2 != address(0) && battle.player2 != address(this)) {
+                _refundEntryFee(battle.player2);
+            }
+        } else {
+            // Past safe zone — inactive player loses, claimant wins
+            battle.status = BattleStatus.Finished;
+            address inactivePlayer = battle.isPlayer1Turn ? battle.player1 : battle.player2;
+            address activePlayer  = battle.isPlayer1Turn ? battle.player2 : battle.player1;
+            battle.winner = activePlayer;
+            _recordWin(activePlayer);
+            _recordLoss(inactivePlayer);
+            activeBattle[battle.player1] = 0;
+            if (battle.player2 != address(this)) activeBattle[battle.player2] = 0;
+            totalBattlesPlayed++;
+            emit BattleFinished(battleId, activePlayer, battle.turn);
+        }
+
+        address inactiveAddr = battle.isPlayer1Turn ? battle.player1 : battle.player2;
+        emit InactivityClaimed(battleId, msg.sender, inactiveAddr);
     }
 
     /* ═══════════════════════════════════════════════════ */
@@ -580,6 +644,12 @@ contract BattleArena is Ownable, ReentrancyGuard {
         entryFee = _fee;
     }
 
+    /// @notice Update inactivity timeout in seconds (e.g. 1800 = 30 minutes)
+    function setInactivityTimeout(uint256 _timeout) external onlyOwner {
+        emit InactivityTimeoutUpdated(inactivityTimeout, _timeout);
+        inactivityTimeout = _timeout;
+    }
+
     function setPlatformFee(uint256 _feeBps) external onlyOwner {
         if (_feeBps > MAX_PLATFORM_FEE) revert InvalidFee();
         platformFeeBps = _feeBps;
@@ -590,8 +660,6 @@ contract BattleArena is Ownable, ReentrancyGuard {
     }
 
     /// @notice Set prize structure
-    /// @param _topTierShares Basis points per top tier player (must NOT sum to 10000)
-    /// @param _totalRewardedPlayers Total players rewarded including equal-share tier
     function setPrizeStructure(uint256[] calldata _topTierShares, uint256 _totalRewardedPlayers) external onlyOwner {
         require(_totalRewardedPlayers >= _topTierShares.length, "Total must be >= top tier count");
         uint256 total = 0;
@@ -650,6 +718,15 @@ contract BattleArena is Ownable, ReentrancyGuard {
         uint8 lastUsed = isPlayer1 ? battle.lastAbility1 : battle.lastAbility2;
         if (lastUsed == 0) return true;
         return battle.turn - lastUsed >= ABILITY_COOLDOWN;
+    }
+
+    /// @notice Returns seconds until inactivity can be claimed, 0 if already claimable
+    function inactivitySecondsRemaining(uint256 battleId) external view returns (uint256) {
+        Battle memory battle = battles[battleId];
+        if (battle.status != BattleStatus.Active) return 0;
+        uint256 deadline = battle.lastMoveAt + inactivityTimeout;
+        if (block.timestamp >= deadline) return 0;
+        return deadline - block.timestamp;
     }
 
     function getPoolInfo() external view returns (
