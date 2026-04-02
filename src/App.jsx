@@ -290,6 +290,7 @@ const pvpPollRef                         = useRef(null);
 
   useEffect(()=>{
     if(connected && addr && provider){ loadBalance(); loadWhales(); loadCards(); }
+    if(page==="market") loadMarketplace();
   },[connected,addr]);
 
   // ── blockchain ──────────────────────────────────────────────────────────────
@@ -903,10 +904,11 @@ const loadCards = async () => {
   const FM = "'JetBrains Mono', monospace";
 
   // ── landing ──────────────────────────────────────────────────────────────────
-  if(!connected) return (
+  const [exploreMode, setExploreMode] = useState(false);
+
+  if(!connected && !exploreMode) return (
     <div style={{minHeight:"100vh",background:"#020817",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:F,position:"relative",overflow:"hidden"}}>
       <style>{css}</style>
-      {/* subtle bg glow */}
       <div style={{position:"absolute",top:"30%",left:"50%",transform:"translate(-50%,-50%)",width:600,height:600,borderRadius:"50%",background:"radial-gradient(circle,rgba(14,165,233,.07),transparent 70%)",pointerEvents:"none"}}/>
       <div style={{position:"relative",zIndex:1,textAlign:"center",animation:"fadeUp .7s ease"}}>
         <div style={{fontSize:80,animation:"float 4s ease-in-out infinite",marginBottom:20}}>🐋</div>
@@ -917,11 +919,18 @@ const loadCards = async () => {
             <span key={i} style={{padding:"6px 14px",borderRadius:20,border:`1px solid ${e.color}40`,color:e.color,fontSize:13,background:`${e.color}0d`}}>{e.icon} {e.name}</span>
           ))}
         </div>
-        <button onClick={handleConnect} style={{padding:"15px 48px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F,letterSpacing:.3,boxShadow:"0 4px 32px rgba(14,165,233,.35)",transition:"transform .15s,box-shadow .15s"}}
-          onMouseEnter={o=>{o.currentTarget.style.transform="scale(1.03)";o.currentTarget.style.boxShadow="0 6px 40px rgba(14,165,233,.5)";}}
-          onMouseLeave={o=>{o.currentTarget.style.transform="none";o.currentTarget.style.boxShadow="0 4px 32px rgba(14,165,233,.35)";}}>
-          Connect Wallet
-        </button>
+        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          <button onClick={handleConnect} style={{padding:"15px 48px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F,letterSpacing:.3,boxShadow:"0 4px 32px rgba(14,165,233,.35)",transition:"transform .15s,box-shadow .15s"}}
+            onMouseEnter={o=>{o.currentTarget.style.transform="scale(1.03)";o.currentTarget.style.boxShadow="0 6px 40px rgba(14,165,233,.5)";}}
+            onMouseLeave={o=>{o.currentTarget.style.transform="none";o.currentTarget.style.boxShadow="0 4px 32px rgba(14,165,233,.35)";}}>
+            Connect Wallet
+          </button>
+          <button onClick={()=>setExploreMode(true)} style={{padding:"15px 48px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:16,fontWeight:600,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
+            onMouseEnter={o=>{o.currentTarget.style.background="rgba(255,255,255,.08)";o.currentTarget.style.color="#f1f5f9";}}
+            onMouseLeave={o=>{o.currentTarget.style.background="rgba(255,255,255,.05)";o.currentTarget.style.color="#94a3b8";}}>
+            Explore App
+          </button>
+        </div>
         <p style={{marginTop:12,fontSize:13,color:"#334155"}}>Tempo Network · Gas in PATHUSD</p>
         <div style={{marginTop:56,display:"flex",gap:40,justifyContent:"center"}}>
           {[["3,333","Whales"],["6","Elements"],["∞","Battles"]].map(([v,l],i)=>(
@@ -1083,12 +1092,14 @@ const loadCards = async () => {
           <span style={{fontSize:11,color:"#0ea5e9",letterSpacing:2,fontFamily:FM}}>TCG</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <div style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:20,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",fontSize:13,color:"#38bdf8"}}>
-            <div style={{width:6,height:6,borderRadius:"50%",background:"#4ade80"}}/>Tempo
-          </div>
-          <div style={{padding:"5px 12px",borderRadius:20,background:"rgba(74,222,128,.08)",border:"1px solid rgba(74,222,128,.2)",fontSize:14,color:"#4ade80",fontWeight:700,fontFamily:FM}}>${balance}</div>
-          <div style={{padding:"5px 12px",borderRadius:20,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",fontSize:13,color:"#94a3b8",fontFamily:FM}}>{addr.slice(0,6)}…{addr.slice(-4)}</div>
-          <button onClick={handleDisconnect} style={{padding:"5px 12px",borderRadius:20,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,cursor:"pointer",fontFamily:F,fontWeight:600}}>Disconnect</button>
+          {connected ? <>
+            <div style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:20,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",fontSize:13,color:"#38bdf8"}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:"#4ade80"}}/>Tempo
+            </div>
+            <div style={{padding:"5px 12px",borderRadius:20,background:"rgba(74,222,128,.08)",border:"1px solid rgba(74,222,128,.2)",fontSize:14,color:"#4ade80",fontWeight:700,fontFamily:FM}}>${balance}</div>
+            <div style={{padding:"5px 12px",borderRadius:20,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",fontSize:13,color:"#94a3b8",fontFamily:FM}}>{addr.slice(0,6)}…{addr.slice(-4)}</div>
+            <button onClick={handleDisconnect} style={{padding:"5px 12px",borderRadius:20,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,cursor:"pointer",fontFamily:F,fontWeight:600}}>Disconnect</button>
+          </> : <button onClick={handleConnect} style={{padding:"7px 18px",borderRadius:20,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:F}}>Connect Wallet</button>}
         </div>
       </header>
 
@@ -1123,9 +1134,12 @@ const loadCards = async () => {
             {!loadingW && whales.length===0 && (
               <div style={{textAlign:"center",padding:80,color:"#334155"}}>
                 <div style={{fontSize:48,marginBottom:16}}>🐋</div>
-                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>No WHEL NFTs found</div>
-                <div style={{fontSize:14,color:"#334155"}}>Make sure MetaMask is on Tempo Network and you hold WHEL NFTs.</div>
-                <button onClick={loadWhales} style={{marginTop:20,padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>
+                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>{connected ? "No WHEL NFTs in your wallet" : "Connect your wallet to view your Whales"}</div>
+                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? "You need WHEL NFTs to generate Whalemon cards." : "Or get WHEL NFTs from the Whelmart collection."}</div>
+                <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+                  {connected && <button onClick={loadWhales} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>}
+                  <a href="https://www.stablewhel.xyz/collection/4217/0x3e12fcb20ad532f653f2907d2ae511364e2ae696" target="_blank" rel="noopener noreferrer" style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F,textDecoration:"none",display:"inline-block"}}>🐋 Whale Up from Whelmart →</a>
+                </div>
               </div>
             )}
 
@@ -1169,9 +1183,12 @@ const loadCards = async () => {
             {!loadingC && cards.length===0 && (
               <div style={{textAlign:"center",padding:80,color:"#334155"}}>
                 <div style={{fontSize:48,marginBottom:16}}>🃏</div>
-                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>No cards yet</div>
-                <div style={{fontSize:14,color:"#334155"}}>Generate cards from your WHEL NFTs first.</div>
-                <button onClick={()=>navigate("whales")} style={{marginTop:20,padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Go to My Whales →</button>
+                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>No Whalemon Trading Cards yet</div>
+                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? "Generate cards from your WHEL NFTs, or pick one up from the Marketplace." : "Connect your wallet to view your cards, or browse the Marketplace."}</div>
+                <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+                  {connected && <button onClick={()=>navigate("whales")} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Generate from My Whales →</button>}
+                  <button onClick={()=>navigate("market")} style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Browse Marketplace →</button>
+                </div>
               </div>
             )}
 
@@ -1223,10 +1240,31 @@ const loadCards = async () => {
                           </div>
                           {/* Action buttons */}
                           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                            <button onClick={()=>{toast("List feature coming soon!");}} style={{width:"100%",padding:"14px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>List for Sale</button>
+                            <button onClick={()=>{
+                              if(!connected){ toast("Connect your wallet to list cards","err"); return; }
+                              const existing = listings.find(l=>l.cardId===picked.id && l.seller.toLowerCase()===addr.toLowerCase());
+                              if(existing){ toast("Already listed! Cancel it first from Marketplace.","info"); return; }
+                              setMktCard(picked); setShowListModal(true); setPicked(null); navigate("market");
+                            }} style={{width:"100%",padding:"14px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>List for Sale</button>
                             <div style={{display:"flex",gap:10}}>
-                              <button onClick={()=>{toast("Send feature coming soon!");}} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Send to Wallet</button>
-                              <button onClick={()=>{toast("Offers feature coming soon!");}} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>View Offers</button>
+                              <button onClick={async()=>{
+                                if(!connected){ toast("Connect your wallet to send cards","err"); return; }
+                                const to = window.prompt("Enter recipient wallet address:");
+                                if(!to || !to.startsWith("0x")){ toast("Invalid address","err"); return; }
+                                try {
+                                  const prov = await ensureTempo();
+                                  const signer = await prov.getSigner();
+                                  const wc = new Contract(CONTRACTS.WHALE_CARDS,[...WHALECARDS_ABI,"function transferFrom(address,address,uint256) external"],signer);
+                                  const tx = await wc.transferFrom(addr, to, picked.id);
+                                  await tx.wait();
+                                  toast(`Card #${picked.id} sent ✓`);
+                                  setPicked(null); await loadCards();
+                                } catch(e){ toast("Send failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                              }} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Send to Wallet</button>
+                              <button onClick={async()=>{
+                                await loadCardOffers(picked.id);
+                                setMktCard(picked); setMktTab("my-cards"); navigate("market"); setPicked(null);
+                              }} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>View Offers</button>
                             </div>
                           </div>
                         </div>
@@ -1294,7 +1332,15 @@ const loadCards = async () => {
                   <button onClick={exitBattle} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600}}>← Back</button>
                 </div>
                 {cards.length===0
-                  ? <div style={{textAlign:"center",padding:60,color:"#475569",fontSize:15}}>No cards yet — <button onClick={()=>{exitBattle();navigate("whales");}} style={{color:"#0ea5e9",background:"none",border:"none",cursor:"pointer",fontFamily:F,fontSize:15}}>generate cards first →</button></div>
+                  ? <div style={{textAlign:"center",padding:60,color:"#475569",fontSize:15}}>
+                      <div style={{fontSize:40,marginBottom:12}}>🃏</div>
+                      <div style={{fontSize:16,fontWeight:600,color:"#475569",marginBottom:8}}>You need a Whalemon card to battle</div>
+                      <div style={{fontSize:14,color:"#334155",marginBottom:16}}>Pick one up from the Marketplace to get started.</div>
+                      <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+                        <button onClick={()=>{exitBattle();navigate("market");}} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Browse Marketplace →</button>
+                        <button onClick={()=>{exitBattle();navigate("whales");}} style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Generate from Whales →</button>
+                      </div>
+                    </div>
                   : <div className="card-grid">{cards.map(c=><Card key={c.id} card={c} onClick={()=>pickCard(c)}/>)}</div>}
               </div>
             )}
@@ -1478,7 +1524,7 @@ const loadCards = async () => {
             {mktTab==="my-cards" && (
               <div>
                 {cards.length===0
-                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>🃏</div><div style={{fontSize:16,fontWeight:600}}>No cards to list</div><div style={{fontSize:14,color:"#334155",marginTop:4}}>Mint cards from your WHEL NFTs first.</div></div>
+                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>🃏</div><div style={{fontSize:16,fontWeight:600}}>No cards available for listing</div><div style={{fontSize:14,color:"#334155",marginTop:4,marginBottom:16}}>{connected ? "Generate cards from your WHEL NFTs to start selling." : "Connect your wallet to list your cards."}</div>{connected && <button onClick={()=>navigate("whales")} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Generate from Whales →</button>}</div>
                   : <div>
                     <p style={{fontSize:14,color:"#64748b",marginBottom:16}}>Click a card to list it for sale or view offers on it.</p>
                     <div className="card-grid">
@@ -1545,7 +1591,8 @@ const loadCards = async () => {
           <div className="page" style={{textAlign:"center",paddingTop:60}}>
             <div style={{fontSize:56,marginBottom:20}}>🏆</div>
             <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:10}}>Leaderboard</h2>
-            <p style={{fontSize:15,color:"#64748b"}}>Season 1 starts once ranked battles begin. Be the first to climb!</p>
+            <p style={{fontSize:15,color:"#64748b",marginBottom:24}}>Season 1 standings will appear here once ranked battles begin. Be the first to climb!</p>
+            {!connected && <button onClick={handleConnect} style={{padding:"12px 32px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>Connect Wallet to Play →</button>}
           </div>
         )}
 
