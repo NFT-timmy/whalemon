@@ -391,7 +391,7 @@ const loadWhales = async () => {
         const battleId = await arena.activeBattle(acc);
         if(Number(battleId) > 0) {
           const battle = await arena.getBattle(battleId);
-          if(battle.status === 1n) { // Active
+          if(Number(battle.status) === 0 || Number(battle.status) === 1) { // Open or Active
             setResumeBattle({ battleId: Number(battleId), battle });
           }
         }
@@ -469,7 +469,7 @@ const loadWhales = async () => {
         if(fee > 0n){
           const allowance = await pathusd.allowance(addr, CONTRACTS.BATTLE_ARENA);
           const decimals  = await pathusd.decimals();
-          const approveAmount = 10n * (10n ** BigInt(decimals));
+          const approveAmount = 10n * (10n ** BigInt(Number(decimals)));
           if(allowance < fee){
             toast("Approving PATHUSD…","info");
             const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, approveAmount);
