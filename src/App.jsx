@@ -630,7 +630,10 @@ const loadCards = async () => {
 
   const handleDisconnect = () => {
     setConnected(false); setAddr(""); setBalance("0.00");
-    setWhales([]); setCards([]); setMintedIds(new Set()); navigate("whales");
+    setWhales([]); setCards([]); setMintedIds(new Set());
+    sessionStorage.removeItem("whalemon_explore");
+    setExploreMode(false);
+    window.location.hash = "";
   };
 
   const handleMint = async (whaleId) => {
@@ -904,7 +907,12 @@ const loadCards = async () => {
   const FM = "'JetBrains Mono', monospace";
 
   // ── landing ──────────────────────────────────────────────────────────────────
-  const [exploreMode, setExploreMode] = useState(false);
+  const [exploreMode, setExploreMode] = useState(()=> sessionStorage.getItem("whalemon_explore")==="1");
+
+  const enterExplore = () => { sessionStorage.setItem("whalemon_explore","1"); setExploreMode(true); };
+
+  // When wallet connects, clear explore mode
+  useEffect(()=>{ if(connected) sessionStorage.removeItem("whalemon_explore"); },[connected]);
 
   if(!connected && !exploreMode) return (
     <div style={{minHeight:"100vh",background:"#020817",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:F,position:"relative",overflow:"hidden"}}>
@@ -925,7 +933,7 @@ const loadCards = async () => {
             onMouseLeave={o=>{o.currentTarget.style.transform="none";o.currentTarget.style.boxShadow="0 4px 32px rgba(14,165,233,.35)";}}>
             Connect Wallet
           </button>
-          <button onClick={()=>setExploreMode(true)} style={{padding:"15px 48px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:16,fontWeight:600,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
+          <button onClick={()=>enterExplore()} style={{padding:"15px 48px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:16,fontWeight:600,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
             onMouseEnter={o=>{o.currentTarget.style.background="rgba(255,255,255,.08)";o.currentTarget.style.color="#f1f5f9";}}
             onMouseLeave={o=>{o.currentTarget.style.background="rgba(255,255,255,.05)";o.currentTarget.style.color="#94a3b8";}}>
             Explore App
