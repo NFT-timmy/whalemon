@@ -795,7 +795,7 @@ const loadWhales = async () => {
                     return <div key={i} style={{flex:"1 1 260px",maxWidth:300,background:"#0a0e1f",borderRadius:14,border:`1px solid ${el(s.c.element).color}25`,padding:16}}>
                       <div style={{fontSize:12,color:s.clr,fontWeight:700,marginBottom:10}}>{s.lbl}</div>
                       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-                        <div style={{width:44,height:44,borderRadius:10,overflow:"hidden",background:`linear-gradient(${el(s.c.element).grad})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🐋</div>
+                        <div style={{width:44,height:44,borderRadius:10,overflow:"hidden",background:`linear-gradient(${el(s.c.element).grad})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{s.c.image?<img src={s.c.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:"🐋"}</div>
                         <div style={{flex:1}}>
                           <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#64748b",marginBottom:4}}><span>HP</span><span style={{fontFamily:FM}}>{hp}/{s.c.health}</span></div>
                           <div style={{height:8,background:"#1e293b",borderRadius:4,overflow:"hidden"}}><div style={{width:`${pct*100}%`,height:"100%",background:pct>.5?"#4ade80":pct>.2?"#facc15":"#ef4444",borderRadius:4,transition:"width .4s"}}/></div>
