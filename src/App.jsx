@@ -224,7 +224,21 @@ export default function WhalemonTCG() {
   const [connected,setConnected]   = useState(false);
   const [addr,setAddr]             = useState("");
   const [balance,setBalance]       = useState("0.00");
-  const [page,setPage]             = useState("whales");
+  const [page,setPage] = useState(()=>{
+    const hash = window.location.hash.replace("#","");
+    return ["whales","cards","battle","market","leaderboard"].includes(hash) ? hash : "whales";
+  });
+
+  const navigate = (p) => { setPage(p); window.location.hash = p; setPicked(null); };
+
+  useEffect(()=>{
+    const onHash = () => {
+      const hash = window.location.hash.replace("#","");
+      if(["whales","cards","battle","market","leaderboard"].includes(hash)) setPage(hash);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  },[]);
   const [provider,setProvider]     = useState(null);
   const [notif,setNotif]           = useState(null);
 
@@ -615,7 +629,7 @@ const loadCards = async () => {
 
   const handleDisconnect = () => {
     setConnected(false); setAddr(""); setBalance("0.00");
-    setWhales([]); setCards([]); setMintedIds(new Set()); setPage("whales");
+    setWhales([]); setCards([]); setMintedIds(new Set()); navigate("whales");
   };
 
   const handleMint = async (whaleId) => {
@@ -923,7 +937,7 @@ const loadCards = async () => {
 
   // ── app shell ────────────────────────────────────────────────────────────────
   const NavBtn = ({label,icon,id})=>(
-    <button onClick={()=>{setPage(id);setPicked(null);}} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,border:"none",background:page===id?"rgba(14,165,233,.12)":"transparent",color:page===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:page===id?700:500,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
+    <button onClick={()=>{navigate(id);}} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,border:"none",background:page===id?"rgba(14,165,233,.12)":"transparent",color:page===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:page===id?700:500,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
       onMouseEnter={o=>{if(page!==id) o.currentTarget.style.color="#94a3b8";}}
       onMouseLeave={o=>{if(page!==id) o.currentTarget.style.color="#64748b";}}>
       <span style={{fontSize:16}}>{icon}</span>{label}
@@ -960,7 +974,7 @@ const loadCards = async () => {
             const card = cards.find(c=>c.id===Number(battle.card1)) || {id:Number(battle.card1),element:0,rarity:0,attack:50,defense:50,health:Number(battle.hp1),speed:50,ability:"Ocean Strike",abilityDesc:"A powerful attack."};
             setBattleId(bid);
             setPCard({...card,hp:Number(battle.hp1)});
-            setPage("battle");
+            navigate("battle");
             if(status === 0) {
               // Open PvP — resume waiting screen and poll
               setBMode("pvp");
@@ -1055,7 +1069,7 @@ const loadCards = async () => {
             <div style={{textAlign:"center",animation:"flip .6s ease"}}>
               <Card card={revealCard} size="lg"/>
               <div style={{marginTop:20,fontSize:20,fontWeight:700,color:el(revealCard.element).color}}>{el(revealCard.element).icon} {RARITIES[revealCard.rarity]} {el(revealCard.element).name}!</div>
-              <button onClick={()=>{setRevealCard(null);setRevealPhase(null);setPage("cards");}} style={{marginTop:16,padding:"12px 32px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>View My Cards →</button>
+              <button onClick={()=>{setRevealCard(null);setRevealPhase(null);navigate("cards");}} style={{marginTop:16,padding:"12px 32px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>View My Cards →</button>
             </div>
           )}
         </div>
@@ -1063,7 +1077,7 @@ const loadCards = async () => {
 
       {/* header */}
       <header style={{position:"sticky",top:0,zIndex:100,background:"rgba(2,8,23,.85)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,.05)",padding:"0 24px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div onClick={()=>navigate("whales")} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
           <span style={{fontSize:22}}>🐋</span>
           <span style={{fontSize:16,fontWeight:800,color:"#f1f5f9",letterSpacing:-.3}}>WHALEMON</span>
           <span style={{fontSize:11,color:"#0ea5e9",letterSpacing:2,fontFamily:FM}}>TCG</span>
@@ -1157,7 +1171,7 @@ const loadCards = async () => {
                 <div style={{fontSize:48,marginBottom:16}}>🃏</div>
                 <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>No cards yet</div>
                 <div style={{fontSize:14,color:"#334155"}}>Generate cards from your WHEL NFTs first.</div>
-                <button onClick={()=>setPage("whales")} style={{marginTop:20,padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Go to My Whales →</button>
+                <button onClick={()=>navigate("whales")} style={{marginTop:20,padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Go to My Whales →</button>
               </div>
             )}
 
@@ -1280,7 +1294,7 @@ const loadCards = async () => {
                   <button onClick={exitBattle} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600}}>← Back</button>
                 </div>
                 {cards.length===0
-                  ? <div style={{textAlign:"center",padding:60,color:"#475569",fontSize:15}}>No cards yet — <button onClick={()=>{exitBattle();setPage("whales");}} style={{color:"#0ea5e9",background:"none",border:"none",cursor:"pointer",fontFamily:F,fontSize:15}}>generate cards first →</button></div>
+                  ? <div style={{textAlign:"center",padding:60,color:"#475569",fontSize:15}}>No cards yet — <button onClick={()=>{exitBattle();navigate("whales");}} style={{color:"#0ea5e9",background:"none",border:"none",cursor:"pointer",fontFamily:F,fontSize:15}}>generate cards first →</button></div>
                   : <div className="card-grid">{cards.map(c=><Card key={c.id} card={c} onClick={()=>pickCard(c)}/>)}</div>}
               </div>
             )}
@@ -1351,9 +1365,9 @@ const loadCards = async () => {
                 <div style={{background:"#0a0e1f",borderRadius:16,border:"1px solid #1e293b",padding:28,width:360,maxWidth:"calc(100vw - 32px)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}><span style={{fontSize:18,fontWeight:700,color:"#f1f5f9"}}>List Card #{mktCard.id}</span><button onClick={()=>{setShowListModal(false);setListPrice("");}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:18}}>✕</button></div>
                   <div style={{marginBottom:16,padding:12,borderRadius:10,background:"#030712",border:"1px solid #1e293b",display:"flex",gap:10,alignItems:"center"}}>
-                    <div style={{width:48,height:48,borderRadius:8,background:`linear-gradient(${ELEMENTS[mktCard.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,overflow:"hidden",position:"relative",flexShrink:0}}>
+                    <div style={{width:48,height:48,borderRadius:8,overflow:"hidden",position:"relative",flexShrink:0,background:"#1e293b"}}>
                       {mktCard.image && <img src={mktCard.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>o.target.style.display="none"}/>}
-                      <span style={{fontSize:22,position:"relative",zIndex:1}}>🐋</span>
+                      {!mktCard.image && <div style={{width:"100%",height:"100%",background:`linear-gradient(${ELEMENTS[mktCard.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🐋</div>}
                     </div>
                     <div><div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>Whalemon #{mktCard.id}</div><div style={{fontSize:12,color:RARITY_COLORS[mktCard.rarity]}}>★ {RARITIES[mktCard.rarity]}</div></div>
                   </div>
