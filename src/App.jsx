@@ -5,7 +5,7 @@ const TEMPO_CHAIN_ID = "0x1079";
 const CONTRACTS = {
   WHEL_NFT:    "0x3e12fcb20ad532f653f2907d2ae511364e2ae696",
   WHALE_CARDS: "0xf482221cf5150868956D80cdE00F589dC227D78A",
-  BATTLE_ARENA:"0x7C220371C08285dBc06C641EC42552A57A85215A",
+  BATTLE_ARENA:"0x510d8D711872CaCBFB6c9A2e4401a6dFDFCd9E23",
   MARKETPLACE: "0xF66E45889adDc6e330B38C0727567f2608EEC475",
   PATHUSD:     "0x20c0000000000000000000000000000000000000",
 };
@@ -35,6 +35,7 @@ const BATTLE_ABI = [
   "function getBattle(uint256 battleId) external view returns (tuple(uint256 battleId,address player1,address player2,uint256 card1,uint256 card2,int16 hp1,int16 hp2,uint8 turn,uint8 lastAbility1,uint8 lastAbility2,bool isPlayer1Turn,uint8 defenseBoost1,uint8 defenseBoost2,uint8 status,uint8 mode,address winner,uint256 createdAt,uint256 finishedAt))",
   "function entryFee() view returns (uint256)",
   "function activeBattle(address) view returns (uint256)",
+  "function forfeitBattle(uint256 battleId) external",
 ];
 
 const ELEMENTS = [
@@ -483,6 +484,25 @@ const loadWhales = async () => {
   };
 
   const exitBattle=()=>{setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);setBattleId(null);};
+
+  const handleForfeit = async () => {
+    if(!battleId) { exitBattle(); return; }
+    setBPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+      const tx = await arena.forfeitBattle(battleId);
+      await tx.wait();
+      toast("Battle forfeited — entry fee refunded.","info");
+      await loadBalance();
+      exitBattle();
+    } catch(e) {
+      console.error("forfeit",e);
+      toast("Forfeit failed: "+(e.reason||e.message||"Unknown"),"err");
+    }
+    setBPending(false);
+  };
   const logColor=tp=>tp?.includes("win")?"#4ade80":tp?.includes("lose")?"#f87171":tp?.startsWith("p")?"#38bdf8":tp?.startsWith("o")?"#f59e0b":"#64748b";
 
   // ── css ──────────────────────────────────────────────────────────────────────
@@ -786,7 +806,7 @@ const loadWhales = async () => {
               <div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
                   <span style={{fontSize:14,color:"#475569"}}>Turn {bTurn} · {bMode==="free"?"Practice":bMode==="ranked-ai"?"Ranked AI":"PvP"}</span>
-                  <button onClick={bResult||bTurn<=2?exitBattle:undefined} disabled={!bResult&&bTurn>2} style={{padding:"7px 16px",borderRadius:8,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:!bResult&&bTurn>2?"#2d3748":"#94a3b8",fontSize:13,cursor:!bResult&&bTurn>2?"not-allowed":"pointer",fontFamily:F,fontWeight:600}}>{bResult?"Exit":bTurn>2?"Forfeit (locked)":"Forfeit"}</button>
+                  <button onClick={bResult?exitBattle:bTurn<=1&&bMode!=="free"?handleForfeit:bMode==="free"?exitBattle:undefined} disabled={!bResult&&bMode!=="free"&&bTurn>1} style={{padding:"7px 16px",borderRadius:8,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:!bResult&&bMode!=="free"&&bTurn>1?"#2d3748":"#94a3b8",fontSize:13,cursor:!bResult&&bMode!=="free"&&bTurn>1?"not-allowed":"pointer",fontFamily:F,fontWeight:600}}>{bResult?"Exit":bMode==="free"?"Exit":bTurn>1?"Forfeit (locked)":"Forfeit"}</button>
                 </div>
                 <div style={{display:"flex",gap:16,justifyContent:"center",flexWrap:"wrap",marginBottom:20}}>
                   {[{lbl:"YOUR WHALEMON",c:pCard,clr:"#4ade80"},null,{lbl:bMode==="pvp"?"OPPONENT":"AI OPPONENT",c:oCard,clr:"#f87171"}].map((s,i)=>{
