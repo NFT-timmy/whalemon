@@ -37,6 +37,10 @@ const BATTLE_ABI = [
   "function activeBattle(address) view returns (uint256)",
   "function forfeitBattle(uint256 battleId) external",
 "function abandonBattle(uint256 battleId) external",
+"function claimInactivityWin(uint256 battleId) external",
+"function inactivitySecondsRemaining(uint256 battleId) view returns (uint256)",
+"function inactivityTimeout() view returns (uint256)",
+"function setInactivityTimeout(uint256 _timeout) external",
 ];
 
 const ELEMENTS = [
