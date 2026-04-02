@@ -1411,18 +1411,31 @@ const loadCards = async () => {
                     const c = cards.find(x=>x.id===l.cardId) || {id:l.cardId,element:0,rarity:0,attack:0,defense:0,health:0,speed:0,ability:"",image:null};
                     const isOwn = l.seller.toLowerCase()===addr.toLowerCase();
                     return (
-                      <div key={l.listingId} style={{width:195,borderRadius:14,background:"#0a0e1f",border:`1.5px solid ${ELEMENTS[c.element]?.color||"#1e293b"}30`,overflow:"hidden"}}>
-                        <div style={{height:3,background:RARITY_COLORS[c.rarity]||RARITY_COLORS[0]}}/>
-                        <div style={{height:120,background:`linear-gradient(${ELEMENTS[c.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:44}}>🐋</div>
-                        <div style={{padding:12}}>
-                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>#{l.cardId}</span><span style={{fontSize:11,color:RARITY_COLORS[c.rarity]}}>★ {RARITIES[c.rarity]}</span></div>
-                          <div style={{fontSize:20,fontWeight:800,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace",marginBottom:8}}>${l.price}</div>
-                          <div style={{fontSize:11,color:"#334155",marginBottom:8}}>{l.seller.slice(0,6)}…{l.seller.slice(-4)}</div>
+                      <div key={l.listingId} style={{width:195,borderRadius:14,background:"#0a0e1f",border:`1.5px solid ${ELEMENTS[c.element]?.color||"#1e293b"}30`,boxShadow:`0 0 20px ${ELEMENTS[c.element]?.color||"#1e293b"}0d`,overflow:"hidden"}}>
+                        <div style={{height:3,background:RARITY_COLORS[c.rarity]||RARITY_COLORS[0],opacity:.8}}/>
+                        <div style={{height:110,background:`linear-gradient(${ELEMENTS[c.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+                          {c.image && <img src={c.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>o.target.style.display="none"}/>}
+                          <span style={{fontSize:36,position:"relative",zIndex:1}}>🐋</span>
+                          <div style={{position:"absolute",top:6,right:6,padding:"2px 7px",borderRadius:20,background:"rgba(0,0,0,.55)",fontSize:10,color:ELEMENTS[c.element]?.color,fontWeight:700}}>{ELEMENTS[c.element]?.icon} {ELEMENTS[c.element]?.name}</div>
+                        </div>
+                        <div style={{padding:"8px 10px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}><span style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>#{l.cardId}</span><span style={{fontSize:10,color:RARITY_COLORS[c.rarity]}}>★ {RARITIES[c.rarity]}</span></div>
+                          <div style={{marginBottom:6}}>
+                            {[["ATK",c.attack,100,"#f87171"],["DEF",c.defense,100,"#60a5fa"],["HP",c.health,300,"#4ade80"],["SPD",c.speed,100,"#facc15"]].map(([lbl,val,max,clr])=>(
+                              <div key={lbl} style={{display:"flex",alignItems:"center",gap:4,marginBottom:2}}>
+                                <span style={{width:22,fontSize:9,color:"#64748b"}}>{lbl}</span>
+                                <div style={{flex:1,height:3,background:"#1e293b",borderRadius:2}}><div style={{width:`${Math.min(100,(val/max)*100)}%`,height:"100%",background:clr,borderRadius:2}}/></div>
+                                <span style={{width:20,fontSize:9,color:"#e2e8f0",textAlign:"right"}}>{val}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{fontSize:18,fontWeight:800,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace",marginBottom:4}}>${l.price}</div>
+                          <div style={{fontSize:10,color:"#334155",marginBottom:8}}>{l.seller.slice(0,6)}…{l.seller.slice(-4)}</div>
                           {isOwn
-                            ? <button onClick={()=>handleCancelListing(l)} disabled={mktPending} style={{width:"100%",padding:"8px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Listing</button>
-                            : <div style={{display:"flex",gap:6}}>
-                                <button onClick={()=>handleBuyCard(l)} disabled={mktPending} style={{flex:1,padding:"8px",borderRadius:8,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Buy</button>
-                                <button onClick={()=>{setMktCard(c);setShowOfferModal(true);}} style={{padding:"8px 10px",borderRadius:8,background:"rgba(139,92,246,.1)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:13,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Offer</button>
+                            ? <button onClick={()=>handleCancelListing(l)} disabled={mktPending} style={{width:"100%",padding:"7px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Listing</button>
+                            : <div style={{display:"flex",gap:5}}>
+                                <button onClick={()=>handleBuyCard(l)} disabled={mktPending} style={{flex:1,padding:"7px",borderRadius:8,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Buy</button>
+                                <button onClick={()=>{setMktCard({...c,listingId:l.listingId});setShowOfferModal(true);}} style={{padding:"7px 9px",borderRadius:8,background:"rgba(139,92,246,.1)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Offer</button>
                               </div>}
                         </div>
                       </div>
@@ -1473,17 +1486,25 @@ const loadCards = async () => {
                                     <button onClick={()=>handleCancelListing(myListing)} disabled={mktPending} style={{width:"100%",padding:"7px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel</button>
                                   </div>
                                 : <button onClick={()=>{setMktCard(c);setShowListModal(true);}} style={{width:"100%",padding:"8px",borderRadius:8,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>List for Sale</button>}
-                              <button onClick={()=>{setMktCard(c);loadCardOffers(c.id);}} style={{width:"100%",marginTop:6,padding:"6px",borderRadius:8,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>View Offers {myOffers.length>0?`(${myOffers.length})`:""}</button>
-                              {mktCard?.id===c.id && myOffers.length>0 && (
-                                <div style={{marginTop:8,borderTop:"1px solid #1e293b",paddingTop:8}}>
-                                  {myOffers.map(o=>(
-                                    <div key={o.offerId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,padding:"6px 8px",borderRadius:8,background:"rgba(139,92,246,.06)",border:"1px solid rgba(139,92,246,.15)"}}>
-                                      <div><div style={{fontSize:13,color:"#a78bfa",fontWeight:700}}>${o.amount}</div><div style={{fontSize:10,color:"#475569"}}>{o.offerer.slice(0,6)}…{o.offerer.slice(-4)}</div></div>
-                                      <button onClick={()=>handleAcceptOffer(o)} disabled={mktPending} style={{padding:"5px 10px",borderRadius:6,background:"linear-gradient(135deg,#4ade80,#22c55e)",border:"none",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Accept</button>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
+                              <button onClick={async()=>{ setMktCard(c); await loadCardOffers(c.id); }} style={{width:"100%",marginTop:6,padding:"6px",borderRadius:8,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>View Offers {myOffers.length>0?`(${myOffers.length})`:""}</button>
+            {mktCard?.id===c.id && (
+              <div style={{marginTop:8,borderTop:"1px solid #1e293b",paddingTop:8}}>
+                {myOffers.length===0
+                  ? <div style={{textAlign:"center",fontSize:12,color:"#334155",padding:"8px 0"}}>No offers yet</div>
+                  : myOffers.map(o=>(
+                    <div key={o.offerId} style={{marginBottom:6,padding:"8px",borderRadius:8,background:"rgba(139,92,246,.06)",border:"1px solid rgba(139,92,246,.15)"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                        <div><div style={{fontSize:13,color:"#a78bfa",fontWeight:700}}>${o.amount}</div><div style={{fontSize:10,color:"#475569"}}>{o.offerer.slice(0,6)}…{o.offerer.slice(-4)}</div></div>
+                        <div style={{fontSize:10,color:"#334155"}}>{Math.max(0,Math.ceil((o.expiresAt-Date.now()/1000)/86400))}d left</div>
+                      </div>
+                      {o.offerer.toLowerCase()===addr.toLowerCase()
+                        ? <button onClick={()=>handleCancelOffer(o)} disabled={mktPending} style={{width:"100%",padding:"5px",borderRadius:6,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:11,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Offer</button>
+                        : <button onClick={()=>handleAcceptOffer(o)} disabled={mktPending} style={{width:"100%",padding:"5px",borderRadius:6,background:"linear-gradient(135deg,#4ade80,#22c55e)",border:"none",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Accept ${o.amount}</button>}
+                    </div>
+                  ))}
+                <button onClick={()=>{setShowOfferModal(true);}} style={{width:"100%",marginTop:4,padding:"6px",borderRadius:8,background:"linear-gradient(135deg,#8b5cf6,#6d28d9)",border:"none",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>+ Make Offer</button>
+              </div>
+            )}
                             </div>
                           </div>
                         );
