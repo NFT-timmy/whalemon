@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { BrowserProvider, Contract, formatUnits } from "ethers";
 
 const TEMPO_CHAIN_ID = "0x1079";
