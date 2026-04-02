@@ -251,12 +251,6 @@ export default function WhalemonTCG() {
   const [bCd,setBCd]               = useState(0);
   const [bResult,setBResult]       = useState(null);
 const [resumeBattle, setResumeBattle] = useState(null);
-const [pvpWaiting, setPvpWaiting]       = useState(false);
-const [pvpOpponent, setPvpOpponent]     = useState(null);
-const [inactivitySecs, setInactivitySecs] = useState(null);
-const pvpPollRef                         = useRef(null);
-const [battleId, setBattleId]           = useState(null);
-const [bPending, setBPending]           = useState(false);
 
 // marketplace
 const [listings, setListings]           = useState([]);
