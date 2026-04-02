@@ -1452,9 +1452,12 @@ const loadCards = async () => {
                   : <div className="card-grid">
                     {listings.filter(l=>l.seller.toLowerCase()===addr.toLowerCase()).map(l=>(
                       <div key={l.listingId} style={{width:195,borderRadius:14,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden"}}>
-                        <div style={{height:120,background:"linear-gradient(135deg,#0c4a6e,#0ea5e9)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:44}}>🐋</div>
+                        <div style={{height:110,background:`linear-gradient(${ELEMENTS[listings.find(x=>x.cardId===l.cardId)?.element||0]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>{(() => { const fc = cards.find(x=>x.id===l.cardId); return fc?.image ? <img src={fc.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",objectPosition:"top",position:"absolute",inset:0}} onError={o=>o.target.style.display="none"}/> : null; })()}<span style={{fontSize:36,position:"relative",zIndex:1}}>🐋</span></div>
                         <div style={{padding:12}}>
-                          <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>#{l.cardId}</div>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>#{l.cardId}</span>{(() => { const fc = cards.find(x=>x.id===l.cardId); return fc ? <span style={{fontSize:10,color:RARITY_COLORS[fc.rarity]}}>★ {RARITIES[fc.rarity]}</span> : null; })()}</div>
+                          {(() => { const fc = cards.find(x=>x.id===l.cardId); return fc ? <div style={{marginBottom:6}}>{[["ATK",fc.attack,100,"#f87171"],["DEF",fc.defense,100,"#60a5fa"],["HP",fc.health,300,"#4ade80"],["SPD",fc.speed,100,"#facc15"]].map(([lbl,val,max,clr])=>(<div key={lbl} style={{display:"flex",alignItems:"center",gap:4,marginBottom:2}}><span style={{width:22,fontSize:9,color:"#64748b"}}>{lbl}</span><div style={{flex:1,height:3,background:"#1e293b",borderRadius:2}}><div style={{width:`${Math.min(100,(val/max)*100)}%`,height:"100%",background:clr,borderRadius:2}}/></div><span style={{width:20,fontSize:9,color:"#e2e8f0",textAlign:"right"}}>{val}</span></div>))}</div> : null; })()}
+                          <div style={{fontSize:18,fontWeight:800,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace",marginBottom:8}}>${l.price}</div>
+                          <button onClick={()=>handleCancelListing(l)}
                           <div style={{fontSize:20,fontWeight:800,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace",marginBottom:8}}>${l.price}</div>
                           <button onClick={()=>handleCancelListing(l)} disabled={mktPending} style={{width:"100%",padding:"8px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Listing</button>
                         </div>
@@ -1486,7 +1489,7 @@ const loadCards = async () => {
                                     <button onClick={()=>handleCancelListing(myListing)} disabled={mktPending} style={{width:"100%",padding:"7px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel</button>
                                   </div>
                                 : <button onClick={()=>{setMktCard(c);setShowListModal(true);}} style={{width:"100%",padding:"8px",borderRadius:8,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>List for Sale</button>}
-                              <button onClick={async()=>{ setMktCard(c); await loadCardOffers(c.id); }} style={{width:"100%",marginTop:6,padding:"6px",borderRadius:8,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>View Offers {myOffers.length>0?`(${myOffers.length})`:""}</button>
+                              <button onClick={async()=>{ setMktCard(mktCard?.id===c.id?null:c); if(mktCard?.id!==c.id) await loadCardOffers(c.id); }} style={{width:"100%",marginTop:6,padding:"6px",borderRadius:8,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>View Offers {myOffers.length>0?`(${myOffers.length})`:""}</button>
             {mktCard?.id===c.id && (
               <div style={{marginTop:8,borderTop:"1px solid #1e293b",paddingTop:8}}>
                 {myOffers.length===0
@@ -1497,12 +1500,9 @@ const loadCards = async () => {
                         <div><div style={{fontSize:13,color:"#a78bfa",fontWeight:700}}>${o.amount}</div><div style={{fontSize:10,color:"#475569"}}>{o.offerer.slice(0,6)}…{o.offerer.slice(-4)}</div></div>
                         <div style={{fontSize:10,color:"#334155"}}>{Math.max(0,Math.ceil((o.expiresAt-Date.now()/1000)/86400))}d left</div>
                       </div>
-                      {o.offerer.toLowerCase()===addr.toLowerCase()
-                        ? <button onClick={()=>handleCancelOffer(o)} disabled={mktPending} style={{width:"100%",padding:"5px",borderRadius:6,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:11,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Offer</button>
-                        : <button onClick={()=>handleAcceptOffer(o)} disabled={mktPending} style={{width:"100%",padding:"5px",borderRadius:6,background:"linear-gradient(135deg,#4ade80,#22c55e)",border:"none",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Accept ${o.amount}</button>}
+                      <button onClick={()=>handleAcceptOffer(o)} disabled={mktPending} style={{width:"100%",padding:"5px",borderRadius:6,background:"linear-gradient(135deg,#4ade80,#22c55e)",border:"none",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Accept ${o.amount}</button>
                     </div>
                   ))}
-                <button onClick={()=>{setShowOfferModal(true);}} style={{width:"100%",marginTop:4,padding:"6px",borderRadius:8,background:"linear-gradient(135deg,#8b5cf6,#6d28d9)",border:"none",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>+ Make Offer</button>
               </div>
             )}
                             </div>
