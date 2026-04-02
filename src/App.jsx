@@ -32,7 +32,11 @@ const PATHUSD_ABI = [
 const BATTLE_ABI = [
   "function createAIBattle(uint256 cardId) external returns (uint256)",
   "function makeMove(uint256 battleId, uint8 move) external",
-  "function getBattle(uint256 battleId) external view returns (tuple(uint256 battleId,address player1,address player2,uint256 card1,uint256 card2,int16 hp1,int16 hp2,uint8 turn,uint8 lastAbility1,uint8 lastAbility2,bool isPlayer1Turn,uint8 defenseBoost1,uint8 defenseBoost2,uint8 status,uint8 mode,address winner,uint256 createdAt,uint256 finishedAt))",
+  "function getBattle(uint256 battleId) external view returns (tuple(uint256 battleId,address player1,address player2,uint256 card1,uint256 card2,int16 hp1,int16 hp2,uint8 turn,uint8 lastAbility1,uint8 lastAbility2,bool isPlayer1Turn,uint8 defenseBoost1,uint8 defenseBoost2,uint8 status,uint8 mode,address winner,uint256 createdAt,uint256 finishedAt,uint256 lastMoveAt))",
+  "function getOpenBattles(uint256 offset, uint256 limit) external view returns (tuple(uint256,address,address,uint256,uint256,int16,int16,uint8,uint8,uint8,bool,uint8,uint8,uint8,uint8,address,uint256,uint256,uint256)[])",
+  "function cancelBattle(uint256 battleId) external",
+  "function createBattle(uint256 cardId) external returns (uint256)",
+  "function joinBattle(uint256 battleId, uint256 cardId) external",
   "function entryFee() view returns (uint256)",
   "function activeBattle(address) view returns (uint256)",
   "function forfeitBattle(uint256 battleId) external",
