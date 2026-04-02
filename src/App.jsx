@@ -740,12 +740,51 @@ const loadWhales = async () => {
         <button onClick={async()=>{
           try {
             const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, await provider.getSigner());
-            const card = cards.find(c=>c.id===Number(resumeBattle.battle.card1)) || {id:Number(resumeBattle.battle.card1),element:0,rarity:0,attack:50,defense:50,health:Number(resumeBattle.battle.hp1),speed:50,ability:"Ocean Strike",abilityDesc:"A powerful attack."};
-            setPCard({...card,hp:Number(resumeBattle.battle.hp1)});
-            setOCard({id:"AI",element:0,rarity:0,attack:50,defense:50,health:200,speed:50,ability:"AI Strike",abilityDesc:"",hp:Number(resumeBattle.battle.hp2)});
-            setBState("fight"); setBMode("ranked-ai");
-            setBTurn(Number(resumeBattle.battle.turn));
-            setBattleId(Number(resumeBattle.battleId));
+            const bid = Number(resumeBattle.battleId);
+            const battle = resumeBattle.battle;
+            const status = Number(battle.status);
+            const card = cards.find(c=>c.id===Number(battle.card1)) || {id:Number(battle.card1),element:0,rarity:0,attack:50,defense:50,health:Number(battle.hp1),speed:50,ability:"Ocean Strike",abilityDesc:"A powerful attack."};
+            setBattleId(bid);
+            setPCard({...card,hp:Number(battle.hp1)});
+            setPage("battle");
+            if(status === 0) {
+              // Open PvP — resume waiting screen and poll
+              setBMode("pvp");
+              setBState("pvp-waiting");
+              setPvpWaiting(true);
+              const prov = await ensureTempo();
+              const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+              pvpPollRef.current = setInterval(async()=>{
+                try {
+                  const b = await arena.getBattle(bid);
+                  if(Number(b.status)===1){
+                    clearInterval(pvpPollRef.current); pvpPollRef.current=null;
+                    setPvpWaiting(false);
+                    const oppCardId = Number(b.card2);
+                    const oppStats = await new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, prov).getCardStats(oppCardId);
+                    setOCard({id:oppCardId,element:Number(oppStats[4]),rarity:Number(oppStats[5]),attack:Number(oppStats[0]),defense:Number(oppStats[1]),health:Number(oppStats[2]),speed:Number(oppStats[3]),ability:"Rival Strike",abilityDesc:"Opponent's card.",hp:Number(b.hp2)});
+                    setPCard({...card,hp:Number(b.hp1)});
+                    setBState("fight"); setBLog([{t:0,s:"Opponent joined! PvP battle started!",tp:"sys"}]);
+                    toast("Opponent found! Battle begins! ⚔️");
+                  }
+                } catch(e){ console.warn("poll",e); }
+              }, 8000);
+            } else if(Number(battle.mode)===1) {
+              // Active AI battle — resume fight
+              setBMode("ranked-ai");
+              setBTurn(Number(battle.turn));
+              setOCard({id:"AI",element:0,rarity:0,attack:50,defense:50,health:200,speed:50,ability:"AI Strike",abilityDesc:"",hp:Number(battle.hp2)});
+              setBState("fight"); setBLog([{t:0,s:"Resumed AI battle.",tp:"sys"}]);
+            } else {
+              // Active PvP battle — resume fight
+              setBMode("pvp");
+              setBTurn(Number(battle.turn));
+              const prov = await ensureTempo();
+              const oppCardId = Number(battle.card1)===Number(battle.card1) && battle.player1.toLowerCase()!==addr.toLowerCase() ? Number(battle.card1) : Number(battle.card2);
+              const oppStats = await new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, prov).getCardStats(oppCardId);
+              setOCard({id:oppCardId,element:Number(oppStats[4]),rarity:Number(oppStats[5]),attack:Number(oppStats[0]),defense:Number(oppStats[1]),health:Number(oppStats[2]),speed:Number(oppStats[3]),ability:"Rival Strike",abilityDesc:"Opponent's card.",hp:Number(battle.player1.toLowerCase()===addr.toLowerCase()?battle.hp2:battle.hp1)});
+              setBState("fight"); setBLog([{t:0,s:"Resumed PvP battle.",tp:"sys"}]);
+            }
             setResumeBattle(null);
             toast("Battle resumed!");
           } catch(e){ toast("Failed to resume: "+e.message,"err"); }
