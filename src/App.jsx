@@ -613,7 +613,7 @@ const loadWhales = async () => {
             setOCard({id:"AI",element:0,rarity:0,attack:50,defense:50,health:200,speed:50,ability:"AI Strike",abilityDesc:"",hp:Number(resumeBattle.battle.hp2)});
             setBState("fight"); setBMode("ranked-ai");
             setBTurn(Number(resumeBattle.battle.turn));
-            setActiveBattleId(Number(resumeBattle.battleId));
+            setBattleId(Number(resumeBattle.battleId));
             setResumeBattle(null);
             toast("Battle resumed!");
           } catch(e){ toast("Failed to resume: "+e.message,"err"); }
