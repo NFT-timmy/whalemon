@@ -46,6 +46,24 @@ const BATTLE_ABI = [
 "function inactivityTimeout() view returns (uint256)",
 "function setInactivityTimeout(uint256 _timeout) external",
 ];
+const MARKETPLACE_ABI = [
+  "function listCard(uint256 cardId, uint256 price) external returns (uint256)",
+  "function buyCard(uint256 listingId) external",
+  "function cancelListing(uint256 listingId) external",
+  "function updateListingPrice(uint256 listingId, uint256 newPrice) external",
+  "function makeOffer(uint256 cardId, uint256 amount, uint256 duration) external returns (uint256)",
+  "function acceptOffer(uint256 offerId) external",
+  "function cancelOffer(uint256 offerId) external",
+  "function getActiveListings(uint256 offset, uint256 limit) external view returns (tuple(uint256 listingId,uint256 cardId,address seller,uint256 price,uint8 status,address buyer,uint256 createdAt,uint256 soldAt)[])",
+  "function getCardOffers(uint256 cardId) external view returns (tuple(uint256 offerId,uint256 cardId,address offerer,uint256 amount,uint256 expiresAt,bool accepted,bool cancelled)[])",
+  "function getRecentSales(uint256 limit) external view returns (tuple(uint256 listingId,uint256 cardId,address seller,uint256 price,uint8 status,address buyer,uint256 createdAt,uint256 soldAt)[])",
+  "function getMarketStats() external view returns (tuple(uint256 totalVolume,uint256 totalSales,uint256 totalListings,uint256 totalOffers))",
+  "function cardToListing(uint256) view returns (uint256)",
+  "function platformFeeBps() view returns (uint256)",
+];
+const MKT_DECIMALS = 18n;
+const toMkt = (val) => BigInt(Math.round(parseFloat(val) * 1e6)) * (10n ** 12n);
+const fromMkt = (val) => (Number(val) / 1e18).toFixed(2);
 
 const ELEMENTS = [
   { name:"Abyss",   color:"#7c3aed", icon:"🌊", grad:"135deg,#1a0a2e,#2d1b69" },
@@ -233,6 +251,27 @@ export default function WhalemonTCG() {
   const [bCd,setBCd]               = useState(0);
   const [bResult,setBResult]       = useState(null);
 const [resumeBattle, setResumeBattle] = useState(null);
+const [pvpWaiting, setPvpWaiting]       = useState(false);
+const [pvpOpponent, setPvpOpponent]     = useState(null);
+const [inactivitySecs, setInactivitySecs] = useState(null);
+const pvpPollRef                         = useRef(null);
+const [battleId, setBattleId]           = useState(null);
+const [bPending, setBPending]           = useState(false);
+
+// marketplace
+const [listings, setListings]           = useState([]);
+const [recentSales, setRecentSales]     = useState([]);
+const [mktStats, setMktStats]           = useState(null);
+const [loadingMkt, setLoadingMkt]       = useState(false);
+const [mktTab, setMktTab]               = useState("browse");
+const [cardOffers, setCardOffers]       = useState({});
+const [showListModal, setShowListModal] = useState(false);
+const [showOfferModal, setShowOfferModal] = useState(false);
+const [mktCard, setMktCard]             = useState(null);
+const [listPrice, setListPrice]         = useState("");
+const [offerAmount, setOfferAmount]     = useState("");
+const [offerDays, setOfferDays]         = useState("3");
+const [mktPending, setMktPending]       = useState(false);
 const [activeBattleId, setActiveBattleId] = useState(null);
 const [pvpWaiting, setPvpWaiting]       = useState(false);
 const [pvpOpponent, setPvpOpponent]     = useState(null);
@@ -323,7 +362,182 @@ const loadWhales = async () => {
       setLoadingW(false);
     };
 
-  const loadCards = async () => {
+const loadMarketplace = async () => {
+    setLoadingMkt(true);
+    try {
+      const prov = await ensureTempo();
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, prov);
+      const [rawListings, rawSales, rawStats] = await Promise.all([
+        mkt.getActiveListings(0, 50),
+        mkt.getRecentSales(10),
+        mkt.getMarketStats(),
+      ]);
+      setListings(rawListings.map(l => ({
+        listingId: Number(l.listingId),
+        cardId: Number(l.cardId),
+        seller: l.seller,
+        price: fromMkt(l.price),
+        rawPrice: l.price,
+        status: Number(l.status),
+      })));
+      setRecentSales(rawSales.map(l => ({
+        listingId: Number(l.listingId),
+        cardId: Number(l.cardId),
+        seller: l.seller,
+        buyer: l.buyer,
+        price: fromMkt(l.price),
+        soldAt: Number(l.soldAt),
+      })));
+      setMktStats({
+        volume: fromMkt(rawStats.totalVolume),
+        sales: Number(rawStats.totalSales),
+        listings: Number(rawStats.totalListings),
+        offers: Number(rawStats.totalOffers),
+      });
+    } catch(e){ console.error("loadMarketplace", e); }
+    setLoadingMkt(false);
+  };
+
+  const loadCardOffers = async (cardId) => {
+    try {
+      const prov = await ensureTempo();
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, prov);
+      const raw = await mkt.getCardOffers(cardId);
+      const active = raw.filter(o => !o.accepted && !o.cancelled && Number(o.expiresAt) > Date.now()/1000);
+      setCardOffers(prev => ({...prev, [cardId]: active.map(o => ({
+        offerId: Number(o.offerId),
+        cardId: Number(o.cardId),
+        offerer: o.offerer,
+        amount: fromMkt(o.amount),
+        rawAmount: o.amount,
+        expiresAt: Number(o.expiresAt),
+      }))}));
+    } catch(e){ console.error("loadCardOffers", e); }
+  };
+
+  const handleListCard = async () => {
+    if(!listPrice || isNaN(listPrice) || parseFloat(listPrice) <= 0) return;
+    setMktPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const wc  = new Contract(CONTRACTS.WHALE_CARDS, [...WHALECARDS_ABI, "function approve(address,uint256) external", "function setApprovalForAll(address,bool) external", "function isApprovedForAll(address,address) view returns (bool)"], signer);
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+      const isApproved = await wc.isApprovedForAll(addr, CONTRACTS.MARKETPLACE);
+      if(!isApproved){
+        toast("Approving marketplace to transfer cards…","info");
+        const appTx = await wc.setApprovalForAll(CONTRACTS.MARKETPLACE, true);
+        await appTx.wait();
+      }
+      const rawPrice = toMkt(listPrice);
+      toast("Listing card…","info");
+      const tx = await mkt.listCard(mktCard.id, rawPrice);
+      await tx.wait();
+      toast(`Card #${mktCard.id} listed for $${listPrice} ✓`);
+      setShowListModal(false); setListPrice(""); setMktCard(null);
+      await Promise.all([loadMarketplace(), loadCards()]);
+    } catch(e){ toast("List failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setMktPending(false);
+  };
+
+  const handleBuyCard = async (listing) => {
+    setMktPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const pathusd = new Contract(CONTRACTS.PATHUSD, PATHUSD_ABI, signer);
+      const mkt     = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+      const allowance = await pathusd.allowance(addr, CONTRACTS.MARKETPLACE);
+      if(allowance < listing.rawPrice){
+        toast("Approving PATHUSD…","info");
+        const appTx = await pathusd.approve(CONTRACTS.MARKETPLACE, listing.rawPrice * 2n);
+        await appTx.wait();
+      }
+      toast("Buying card…","info");
+      const tx = await mkt.buyCard(listing.listingId);
+      await tx.wait();
+      toast(`Card #${listing.cardId} purchased! ✓`);
+      await Promise.all([loadMarketplace(), loadCards(), loadBalance()]);
+    } catch(e){ toast("Buy failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setMktPending(false);
+  };
+
+  const handleCancelListing = async (listing) => {
+    setMktPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+      const tx = await mkt.cancelListing(listing.listingId);
+      await tx.wait();
+      toast(`Listing cancelled ✓`);
+      await Promise.all([loadMarketplace(), loadCards()]);
+    } catch(e){ toast("Cancel failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setMktPending(false);
+  };
+
+  const handleMakeOffer = async () => {
+    if(!offerAmount || isNaN(offerAmount) || parseFloat(offerAmount) <= 0) return;
+    setMktPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const pathusd = new Contract(CONTRACTS.PATHUSD, PATHUSD_ABI, signer);
+      const mkt     = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+      const rawAmount = toMkt(offerAmount);
+      const allowance = await pathusd.allowance(addr, CONTRACTS.MARKETPLACE);
+      if(allowance < rawAmount){
+        toast("Approving PATHUSD…","info");
+        const appTx = await pathusd.approve(CONTRACTS.MARKETPLACE, rawAmount * 2n);
+        await appTx.wait();
+      }
+      const duration = BigInt(parseInt(offerDays) * 24 * 60 * 60);
+      toast("Submitting offer…","info");
+      const tx = await mkt.makeOffer(mktCard.id, rawAmount, duration);
+      await tx.wait();
+      toast(`Offer of $${offerAmount} placed on #${mktCard.id} ✓`);
+      setShowOfferModal(false); setOfferAmount(""); setMktCard(null);
+      await loadCardOffers(mktCard.id);
+    } catch(e){ toast("Offer failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setMktPending(false);
+  };
+
+  const handleAcceptOffer = async (offer) => {
+    setMktPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const wc  = new Contract(CONTRACTS.WHALE_CARDS, [...WHALECARDS_ABI, "function setApprovalForAll(address,bool) external", "function isApprovedForAll(address,address) view returns (bool)"], signer);
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+      const isApproved = await wc.isApprovedForAll(addr, CONTRACTS.MARKETPLACE);
+      if(!isApproved){
+        toast("Approving marketplace…","info");
+        const appTx = await wc.setApprovalForAll(CONTRACTS.MARKETPLACE, true);
+        await appTx.wait();
+      }
+      toast("Accepting offer…","info");
+      const tx = await mkt.acceptOffer(offer.offerId);
+      await tx.wait();
+      toast(`Offer accepted — $${offer.amount} received ✓`);
+      await Promise.all([loadMarketplace(), loadCards(), loadBalance()]);
+    } catch(e){ toast("Accept failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setMktPending(false);
+  };
+
+  const handleCancelOffer = async (offer) => {
+    setMktPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+      const tx = await mkt.cancelOffer(offer.offerId);
+      await tx.wait();
+      toast(`Offer cancelled ✓`);
+      await loadCardOffers(offer.cardId);
+    } catch(e){ toast("Cancel offer failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setMktPending(false);
+  };  
+const loadCards = async () => {
     setLoadingC(true);
     try {
       const prov   = await ensureTempo();
@@ -1129,15 +1343,181 @@ const loadWhales = async () => {
         )}
 
         {/* ── MARKETPLACE ── */}
-        {page==="market" && (
-          <div className="page" style={{textAlign:"center",paddingTop:60}}>
-            <div style={{fontSize:56,marginBottom:20}}>🏪</div>
-            <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:10}}>Marketplace</h2>
-            <p style={{fontSize:15,color:"#64748b",marginBottom:24}}>Card trading coming soon. Contracts are deployed and ready.</p>
-            <div style={{display:"inline-block",padding:"12px 20px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
-              <div style={{fontSize:12,color:"#475569",marginBottom:4}}>Marketplace Contract</div>
-              <div style={{fontSize:13,color:"#38bdf8",fontFamily:FM}}>{CONTRACTS.MARKETPLACE}</div>
+       {page==="market" && (
+          <div className="page">
+            {/* List Modal */}
+            {showListModal && mktCard && (
+              <div style={{position:"fixed",inset:0,zIndex:800,background:"rgba(2,8,23,.92)",backdropFilter:"blur(14px)",display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .2s"}}>
+                <div style={{background:"#0a0e1f",borderRadius:16,border:"1px solid #1e293b",padding:28,width:360,maxWidth:"calc(100vw - 32px)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}><span style={{fontSize:18,fontWeight:700,color:"#f1f5f9"}}>List Card #{mktCard.id}</span><button onClick={()=>{setShowListModal(false);setListPrice("");}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:18}}>✕</button></div>
+                  <div style={{marginBottom:16,padding:12,borderRadius:10,background:"#030712",border:"1px solid #1e293b",display:"flex",gap:10,alignItems:"center"}}>
+                    <div style={{width:48,height:48,borderRadius:8,background:`linear-gradient(${ELEMENTS[mktCard.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🐋</div>
+                    <div><div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>Whalemon #{mktCard.id}</div><div style={{fontSize:12,color:RARITY_COLORS[mktCard.rarity]}}>★ {RARITIES[mktCard.rarity]}</div></div>
+                  </div>
+                  <div style={{marginBottom:16}}>
+                    <label style={{fontSize:12,color:"#64748b",display:"block",marginBottom:6}}>Price (PATHUSD)</label>
+                    <input type="number" value={listPrice} onChange={e=>setListPrice(e.target.value)} placeholder="e.g. 5.00" style={{width:"100%",padding:"10px 12px",borderRadius:8,background:"#030712",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:15,outline:"none",fontFamily:"'Inter',-apple-system,sans-serif"}}/>
+                    <div style={{fontSize:11,color:"#334155",marginTop:4}}>Minimum 0.01 PATHUSD · 2.5% platform fee</div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={handleListCard} disabled={mktPending||!listPrice} style={{flex:1,padding:"11px",borderRadius:10,background:mktPending||!listPrice?"#1e293b":"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:mktPending||!listPrice?"#475569":"#fff",fontSize:14,fontWeight:700,cursor:mktPending||!listPrice?"not-allowed":"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{mktPending?"Listing…":"List for Sale"}</button>
+                    <button onClick={()=>{setShowListModal(false);setListPrice("");}} style={{padding:"11px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {/* Offer Modal */}
+            {showOfferModal && mktCard && (
+              <div style={{position:"fixed",inset:0,zIndex:800,background:"rgba(2,8,23,.92)",backdropFilter:"blur(14px)",display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .2s"}}>
+                <div style={{background:"#0a0e1f",borderRadius:16,border:"1px solid #1e293b",padding:28,width:360,maxWidth:"calc(100vw - 32px)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}><span style={{fontSize:18,fontWeight:700,color:"#f1f5f9"}}>Make Offer on #{mktCard.id}</span><button onClick={()=>{setShowOfferModal(false);setOfferAmount("");}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:18}}>✕</button></div>
+                  <div style={{marginBottom:12}}>
+                    <label style={{fontSize:12,color:"#64748b",display:"block",marginBottom:6}}>Offer Amount (PATHUSD)</label>
+                    <input type="number" value={offerAmount} onChange={e=>setOfferAmount(e.target.value)} placeholder="e.g. 3.00" style={{width:"100%",padding:"10px 12px",borderRadius:8,background:"#030712",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:15,outline:"none",fontFamily:"'Inter',-apple-system,sans-serif"}}/>
+                  </div>
+                  <div style={{marginBottom:16}}>
+                    <label style={{fontSize:12,color:"#64748b",display:"block",marginBottom:6}}>Valid for (days)</label>
+                    <div style={{display:"flex",gap:6}}>{["1","3","7","14"].map(d=><button key={d} onClick={()=>setOfferDays(d)} style={{flex:1,padding:"8px 0",borderRadius:8,background:offerDays===d?"rgba(14,165,233,.15)":"rgba(255,255,255,.04)",border:`1px solid ${offerDays===d?"rgba(14,165,233,.4)":"rgba(255,255,255,.08)"}`,color:offerDays===d?"#38bdf8":"#64748b",fontSize:13,fontWeight:offerDays===d?700:400,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{d}d</button>)}</div>
+                  </div>
+                  <div style={{fontSize:11,color:"#334155",marginBottom:14}}>Your PATHUSD will be locked until offer expires or is cancelled.</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={handleMakeOffer} disabled={mktPending||!offerAmount} style={{flex:1,padding:"11px",borderRadius:10,background:mktPending||!offerAmount?"#1e293b":"linear-gradient(135deg,#8b5cf6,#6d28d9)",border:"none",color:mktPending||!offerAmount?"#475569":"#fff",fontSize:14,fontWeight:700,cursor:mktPending||!offerAmount?"not-allowed":"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{mktPending?"Submitting…":"Place Offer"}</button>
+                    <button onClick={()=>{setShowOfferModal(false);setOfferAmount("");}} style={{padding:"11px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:10}}>
+              <div><h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>Marketplace</h2><p style={{fontSize:14,color:"#64748b"}}>Trade Whalemon cards in PATHUSD</p></div>
+              <button onClick={()=>{loadMarketplace();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif",fontWeight:600}}>↻ Refresh</button>
             </div>
+            {/* Stats */}
+            {mktStats && <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+              {[["💰 Volume",`$${mktStats.volume}`,"#4ade80"],["🛒 Sales",mktStats.sales,"#38bdf8"],["📋 Listed",mktStats.listings,"#f59e0b"],["🤝 Offers",mktStats.offers,"#a855f7"]].map(([l,v,c])=>(
+                <div key={l} style={{flex:"1 1 110px",padding:"12px 14px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:12,color:"#475569",marginBottom:4}}>{l}</div>
+                  <div style={{fontSize:20,fontWeight:800,color:c,fontFamily:"'JetBrains Mono',monospace"}}>{v}</div>
+                </div>
+              ))}
+            </div>}
+            {/* Tabs */}
+            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
+              {[["browse","🏪 Browse"],["my-listings","📋 My Listings"],["my-cards","⚡ List My Cards"],["sales","📈 Recent Sales"]].map(([id,label])=>(
+                <button key={id} onClick={()=>{ setMktTab(id); if(id==="browse"||id==="sales") loadMarketplace(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:mktTab===id?"rgba(14,165,233,.12)":"transparent",color:mktTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:mktTab===id?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{label}</button>
+              ))}
+            </div>
+            {loadingMkt && <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/><div style={{fontSize:15}}>Loading marketplace…</div></div>}
+            {/* Browse */}
+            {mktTab==="browse" && !loadingMkt && (
+              <div>
+                {listings.length===0 ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>🏪</div><div style={{fontSize:16,fontWeight:600,color:"#475569"}}>No listings yet</div><div style={{fontSize:14,color:"#334155",marginTop:4}}>Be the first to list a card!</div></div>
+                : <div className="card-grid">
+                  {listings.map(l=>{
+                    const c = cards.find(x=>x.id===l.cardId) || {id:l.cardId,element:0,rarity:0,attack:0,defense:0,health:0,speed:0,ability:"",image:null};
+                    const isOwn = l.seller.toLowerCase()===addr.toLowerCase();
+                    return (
+                      <div key={l.listingId} style={{width:195,borderRadius:14,background:"#0a0e1f",border:`1.5px solid ${ELEMENTS[c.element]?.color||"#1e293b"}30`,overflow:"hidden"}}>
+                        <div style={{height:3,background:RARITY_COLORS[c.rarity]||RARITY_COLORS[0]}}/>
+                        <div style={{height:120,background:`linear-gradient(${ELEMENTS[c.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:44}}>🐋</div>
+                        <div style={{padding:12}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>#{l.cardId}</span><span style={{fontSize:11,color:RARITY_COLORS[c.rarity]}}>★ {RARITIES[c.rarity]}</span></div>
+                          <div style={{fontSize:20,fontWeight:800,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace",marginBottom:8}}>${l.price}</div>
+                          <div style={{fontSize:11,color:"#334155",marginBottom:8}}>{l.seller.slice(0,6)}…{l.seller.slice(-4)}</div>
+                          {isOwn
+                            ? <button onClick={()=>handleCancelListing(l)} disabled={mktPending} style={{width:"100%",padding:"8px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Listing</button>
+                            : <div style={{display:"flex",gap:6}}>
+                                <button onClick={()=>handleBuyCard(l)} disabled={mktPending} style={{flex:1,padding:"8px",borderRadius:8,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Buy</button>
+                                <button onClick={()=>{setMktCard(c);setShowOfferModal(true);}} style={{padding:"8px 10px",borderRadius:8,background:"rgba(139,92,246,.1)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:13,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Offer</button>
+                              </div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>}
+              </div>
+            )}
+            {/* My Listings */}
+            {mktTab==="my-listings" && !loadingMkt && (
+              <div>
+                {listings.filter(l=>l.seller.toLowerCase()===addr.toLowerCase()).length===0
+                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:16,fontWeight:600}}>No active listings</div><div style={{fontSize:14,color:"#334155",marginTop:4}}>Go to "List My Cards" to sell your cards.</div></div>
+                  : <div className="card-grid">
+                    {listings.filter(l=>l.seller.toLowerCase()===addr.toLowerCase()).map(l=>(
+                      <div key={l.listingId} style={{width:195,borderRadius:14,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden"}}>
+                        <div style={{height:120,background:"linear-gradient(135deg,#0c4a6e,#0ea5e9)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:44}}>🐋</div>
+                        <div style={{padding:12}}>
+                          <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>#{l.cardId}</div>
+                          <div style={{fontSize:20,fontWeight:800,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace",marginBottom:8}}>${l.price}</div>
+                          <button onClick={()=>handleCancelListing(l)} disabled={mktPending} style={{width:"100%",padding:"8px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Listing</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>}
+              </div>
+            )}
+            {/* List My Cards */}
+            {mktTab==="my-cards" && (
+              <div>
+                {cards.length===0
+                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>🃏</div><div style={{fontSize:16,fontWeight:600}}>No cards to list</div><div style={{fontSize:14,color:"#334155",marginTop:4}}>Mint cards from your WHEL NFTs first.</div></div>
+                  : <div>
+                    <p style={{fontSize:14,color:"#64748b",marginBottom:16}}>Click a card to list it for sale or view offers.</p>
+                    <div className="card-grid">
+                      {cards.map(c=>{
+                        const myListing = listings.find(l=>l.cardId===c.id&&l.seller.toLowerCase()===addr.toLowerCase());
+                        const myOffers  = cardOffers[c.id] || [];
+                        return (
+                          <div key={c.id} style={{width:195,borderRadius:14,background:"#0a0e1f",border:`1.5px solid ${ELEMENTS[c.element]?.color||"#1e293b"}30`,overflow:"hidden"}}>
+                            <div style={{height:3,background:RARITY_COLORS[c.rarity]}}/>
+                            <div style={{height:120,background:`linear-gradient(${ELEMENTS[c.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:44}}>🐋</div>
+                            <div style={{padding:12}}>
+                              <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>#{c.id}</span><span style={{fontSize:11,color:RARITY_COLORS[c.rarity]}}>★ {RARITIES[c.rarity]}</span></div>
+                              {myListing
+                                ? <div>
+                                    <div style={{fontSize:13,color:"#4ade80",fontWeight:700,marginBottom:6}}>Listed: ${myListing.price}</div>
+                                    <button onClick={()=>handleCancelListing(myListing)} disabled={mktPending} style={{width:"100%",padding:"7px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel</button>
+                                  </div>
+                                : <button onClick={()=>{setMktCard(c);setShowListModal(true);}} style={{width:"100%",padding:"8px",borderRadius:8,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>List for Sale</button>}
+                              <button onClick={()=>{setMktCard(c);loadCardOffers(c.id);}} style={{width:"100%",marginTop:6,padding:"6px",borderRadius:8,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>View Offers {myOffers.length>0?`(${myOffers.length})`:""}</button>
+                              {mktCard?.id===c.id && myOffers.length>0 && (
+                                <div style={{marginTop:8,borderTop:"1px solid #1e293b",paddingTop:8}}>
+                                  {myOffers.map(o=>(
+                                    <div key={o.offerId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,padding:"6px 8px",borderRadius:8,background:"rgba(139,92,246,.06)",border:"1px solid rgba(139,92,246,.15)"}}>
+                                      <div><div style={{fontSize:13,color:"#a78bfa",fontWeight:700}}>${o.amount}</div><div style={{fontSize:10,color:"#475569"}}>{o.offerer.slice(0,6)}…{o.offerer.slice(-4)}</div></div>
+                                      <button onClick={()=>handleAcceptOffer(o)} disabled={mktPending} style={{padding:"5px 10px",borderRadius:6,background:"linear-gradient(135deg,#4ade80,#22c55e)",border:"none",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Accept</button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>}
+              </div>
+            )}
+            {/* Recent Sales */}
+            {mktTab==="sales" && !loadingMkt && (
+              <div>
+                {recentSales.length===0
+                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>📈</div><div style={{fontSize:16,fontWeight:600}}>No sales yet</div></div>
+                  : <div style={{borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden"}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",padding:"10px 16px",borderBottom:"1px solid #1e293b",fontSize:12,color:"#475569",fontWeight:600}}>
+                      <span>Card</span><span>Price</span><span>Seller</span><span>Buyer</span>
+                    </div>
+                    {recentSales.map((s,i)=>(
+                      <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",padding:"12px 16px",borderBottom:"1px solid #0a0e27",alignItems:"center"}}>
+                        <span style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>#{s.cardId}</span>
+                        <span style={{fontSize:14,fontWeight:700,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace"}}>${s.price}</span>
+                        <span style={{fontSize:12,color:"#64748b"}}>{s.seller.slice(0,6)}…{s.seller.slice(-4)}</span>
+                        <span style={{fontSize:12,color:"#64748b"}}>{s.buyer.slice(0,6)}…{s.buyer.slice(-4)}</span>
+                      </div>
+                    ))}
+                  </div>}
+              </div>
+            )}
           </div>
         )}
 
