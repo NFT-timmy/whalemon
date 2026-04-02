@@ -806,7 +806,7 @@ const loadWhales = async () => {
               <div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
                   <span style={{fontSize:14,color:"#475569"}}>Turn {bTurn} · {bMode==="free"?"Practice":bMode==="ranked-ai"?"Ranked AI":"PvP"}</span>
-                  <button onClick={bResult?exitBattle:bTurn<=1&&bMode!=="free"?handleForfeit:bMode==="free"?exitBattle:undefined} disabled={!bResult&&bMode!=="free"&&bTurn>1} style={{padding:"7px 16px",borderRadius:8,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:!bResult&&bMode!=="free"&&bTurn>1?"#2d3748":"#94a3b8",fontSize:13,cursor:!bResult&&bMode!=="free"&&bTurn>1?"not-allowed":"pointer",fontFamily:F,fontWeight:600}}>{bResult?"Exit":bMode==="free"?"Exit":bTurn>1?"Forfeit (locked)":"Forfeit"}</button>
+                  <button onClick={bResult?exitBattle:bTurn<=2&&bMode!=="free"?handleForfeit:bMode==="free"?exitBattle:undefined} disabled={!bResult&&bMode!=="free"&&bTurn>2} style={{padding:"7px 16px",borderRadius:8,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:!bResult&&bMode!=="free"&&bTurn>2?"#2d3748":"#94a3b8",fontSize:13,cursor:!bResult&&bMode!=="free"&&bTurn>2?"not-allowed":"pointer",fontFamily:F,fontWeight:600}}>{bResult?"Exit":bMode==="free"?"Exit":bTurn>2?"Forfeit (locked)":"Forfeit"}</button>
                 </div>
                 <div style={{display:"flex",gap:16,justifyContent:"center",flexWrap:"wrap",marginBottom:20}}>
                   {[{lbl:"YOUR WHALEMON",c:pCard,clr:"#4ade80"},null,{lbl:bMode==="pvp"?"OPPONENT":"AI OPPONENT",c:oCard,clr:"#f87171"}].map((s,i)=>{
