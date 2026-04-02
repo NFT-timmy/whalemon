@@ -622,11 +622,20 @@ const loadWhales = async () => {
           try {
             const signer = await provider.getSigner();
             const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
-            await arena.abandonBattle(Number(resumeBattle.battleId));
-            toast("Battle abandoned — recorded as a loss.");
+            const turn = Number(resumeBattle.battle.turn);
+            if(turn <= 2) {
+              const tx = await arena.forfeitBattle(Number(resumeBattle.battleId));
+              await tx.wait();
+              await loadBalance();
+              toast("Battle ended — entry fee refunded ✓","info");
+            } else {
+              const tx = await arena.abandonBattle(Number(resumeBattle.battleId));
+              await tx.wait();
+              toast("Battle abandoned — recorded as a loss.","info");
+            }
             setResumeBattle(null);
-          } catch(e){ toast("Failed to abandon: "+e.message,"err"); }
-        }} style={{flex:1,padding:"12px",borderRadius:10,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.3)",color:"#f87171",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>✕ Abandon (Loss)</button>
+          } catch(e){ toast("Failed: "+e.message,"err"); }
+        }} style={{flex:1,padding:"12px",borderRadius:10,background:Number(resumeBattle.battle.turn)<=2?"rgba(74,222,128,.08)":"rgba(239,68,68,.08)",border:`1px solid ${Number(resumeBattle.battle.turn)<=2?"rgba(74,222,128,.3)":"rgba(239,68,68,.3)"}`,color:Number(resumeBattle.battle.turn)<=2?"#4ade80":"#f87171",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>{Number(resumeBattle.battle.turn)<=2?"✓ End & Refund":"✕ Abandon (Loss)"}</button>
       </div>
     </div>
   </div>
