@@ -153,6 +153,51 @@ function Card({ card, size="md", onClick }) {
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
+function InactivityTimer({ battleId, addr, provider, CONTRACTS, BATTLE_ABI, onClaimed }) {
+  const [secs, setSecs] = useState(null);
+  const [claiming, setClaiming] = useState(false);
+
+  useEffect(() => {
+    if(!provider || !battleId) return;
+    const check = async () => {
+      try {
+        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, provider);
+        const remaining = await arena.inactivitySecondsRemaining(battleId);
+        setSecs(Number(remaining));
+      } catch(e) { console.warn("inactivity check", e); }
+    };
+    check();
+    const interval = setInterval(check, 10000);
+    return () => clearInterval(interval);
+  }, [battleId, provider]);
+
+  if(secs === null || secs > 0) return (
+    secs !== null && secs < 300 ? (
+      <div style={{textAlign:"center",marginBottom:12,fontSize:13,color:"#f59e0b"}}>
+        ⏱ Opponent inactivity claim available in {Math.floor(secs/60)}m {secs%60}s
+      </div>
+    ) : null
+  );
+
+  return (
+    <div style={{textAlign:"center",marginBottom:12}}>
+      <button onClick={async()=>{
+        setClaiming(true);
+        try {
+          const signer = await provider.getSigner();
+          const arena  = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+          const tx     = await arena.claimInactivityWin(battleId);
+          await tx.wait();
+          await onClaimed();
+        } catch(e){ console.error("claim inactivity", e); }
+        setClaiming(false);
+      }} disabled={claiming} style={{padding:"10px 24px",borderRadius:10,background:"rgba(245,158,11,.1)",border:"1px solid rgba(245,158,11,.3)",color:"#f59e0b",fontSize:14,fontWeight:700,cursor:claiming?"not-allowed":"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>
+        {claiming ? "Claiming…" : "⏱ Claim Inactivity Win"}
+      </button>
+      <div style={{fontSize:12,color:"#475569",marginTop:4}}>Opponent inactive for 30+ minutes</div>
+    </div>
+  );
+}
 export default function WhalemonTCG() {
   const [connected,setConnected]   = useState(false);
   const [addr,setAddr]             = useState("");
@@ -185,6 +230,10 @@ export default function WhalemonTCG() {
   const [bResult,setBResult]       = useState(null);
 const [resumeBattle, setResumeBattle] = useState(null);
 const [activeBattleId, setActiveBattleId] = useState(null);
+const [pvpWaiting, setPvpWaiting]       = useState(false);
+const [pvpOpponent, setPvpOpponent]     = useState(null);
+const [inactivitySecs, setInactivitySecs] = useState(null);
+const pvpPollRef                         = useRef(null);
 
   const toast = (m,t="ok") => { setNotif({m,t}); setTimeout(()=>setNotif(null),3500); };
 
@@ -386,7 +435,7 @@ const loadWhales = async () => {
   const [battleId,setBattleId] = useState(null);
   const [bPending,setBPending] = useState(false);
 
-  const startBattle = m => { setBMode(m);setBState("select");setBLog([]);setBTurn(1);setBCd(0);setBResult(null);setPCard(null);setOCard(null);setBattleId(null); };
+  const startBattle = m => { if(pvpPollRef.current){ clearInterval(pvpPollRef.current); pvpPollRef.current=null; } setPvpWaiting(false); setPvpOpponent(null); setBMode(m);setBState("select");setBLog([]);setBTurn(1);setBCd(0);setBResult(null);setPCard(null);setOCard(null);setBattleId(null); };
 
   const adv=(a,d)=>({0:3,3:4,4:1,1:5,5:2,2:0}[a]===d);
   const calcDmg=(a,d,ab,adv_)=>Math.max(5,Math.round((a.attack*100/(100+d.defense))*(ab?1.8:1)*(adv_?1.5:1)*(0.9+Math.random()*.2)));
@@ -402,6 +451,81 @@ const loadWhales = async () => {
         ability:["Void Pulse","Riptide Slash","Thunder Breach","Ice Barb","Reef Sting","Crushing Jaw"][eIdx],
         hp});
       setBState("fight"); setBLog([{t:0,s:"Battle started! (Practice)",tp:"sys"}]);
+      return;
+    }
+// ranked-pvp — on-chain matchmaking
+    if(bMode==="pvp"){
+      setBPending(true);
+      try {
+        const prov = await ensureTempo();
+        const signer = await prov.getSigner();
+        const pathusd = new Contract(CONTRACTS.PATHUSD, PATHUSD_ABI, signer);
+        const arena   = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+        const fee     = await arena.entryFee();
+        if(fee > 0n){
+          const allowance = await pathusd.allowance(addr, CONTRACTS.BATTLE_ARENA);
+          const decimals  = await pathusd.decimals();
+          const approveAmount = 10n * (10n ** BigInt(decimals));
+          if(allowance < fee){
+            toast("Approving PATHUSD…","info");
+            const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, approveAmount);
+            await approveTx.wait();
+          }
+        }
+        // Check for open battles to join
+        const openBattles = await arena.getOpenBattles(0, 10);
+        let bid;
+        if(openBattles.length > 0){
+          // Join the first open battle
+          toast("Opponent found! Joining battle…","info");
+          const tx = await arena.joinBattle(Number(openBattles[0].battleId), c.id);
+          await tx.wait();
+          bid = Number(openBattles[0].battleId);
+        } else {
+          // Create a new battle and wait
+          toast("Creating battle — waiting for opponent…","info");
+          const tx = await arena.createBattle(c.id);
+          const receipt = await tx.wait();
+          const event = receipt.logs.map(log=>{ try{ return arena.interface.parseLog(log); }catch(_){return null;} }).find(e=>e&&e.name==="BattleCreated");
+          bid = event ? Number(event.args.battleId) : Number(await arena.activeBattle(addr));
+        }
+        setBattleId(bid);
+        setPCard({...c, hp:c.health});
+        const battle = await arena.getBattle(bid);
+        if(Number(battle.status)===1){ // Already Active — opponent was found
+          // Load opponent card stats
+          const oppCardId = Number(battle.card2)===c.id ? Number(battle.card1) : Number(battle.card2);
+          const oppStats  = await new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, prov).getCardStats(oppCardId);
+          const oppHp     = Number(battle.player1.toLowerCase()===addr.toLowerCase() ? battle.hp1 : battle.hp2);
+          const myHp      = Number(battle.player1.toLowerCase()===addr.toLowerCase() ? battle.hp1 : battle.hp2);
+          setOCard({id:oppCardId,element:Number(oppStats[4]),rarity:Number(oppStats[5]),attack:Number(oppStats[0]),defense:Number(oppStats[1]),health:Number(oppStats[2]),speed:Number(oppStats[3]),ability:"Rival Strike",abilityDesc:"Opponent's card.",hp:Number(battle.player1.toLowerCase()===addr.toLowerCase()?battle.hp2:battle.hp1)});
+          setPCard({...c, hp:myHp});
+          setBState("fight"); setBLog([{t:0,s:"PvP battle started! 1 PATHUSD entry fee paid.",tp:"sys"}]);
+        } else {
+          // Waiting for opponent — start polling
+          setPvpWaiting(true);
+          setBState("pvp-waiting");
+          pvpPollRef.current = setInterval(async()=>{
+            try {
+              const b = await arena.getBattle(bid);
+              if(Number(b.status)===1){
+                clearInterval(pvpPollRef.current); pvpPollRef.current=null;
+                setPvpWaiting(false);
+                const oppCardId = Number(b.card2);
+                const oppStats  = await new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, prov).getCardStats(oppCardId);
+                setOCard({id:oppCardId,element:Number(oppStats[4]),rarity:Number(oppStats[5]),attack:Number(oppStats[0]),defense:Number(oppStats[1]),health:Number(oppStats[2]),speed:Number(oppStats[3]),ability:"Rival Strike",abilityDesc:"Opponent's card.",hp:Number(b.hp2)});
+                setPCard({...c, hp:Number(b.hp1)});
+                setBState("fight"); setBLog([{t:0,s:"Opponent joined! PvP battle started!",tp:"sys"}]);
+                toast("Opponent found! Battle begins! ⚔️");
+              }
+            } catch(e){ console.warn("poll",e); }
+          }, 4000);
+        }
+      } catch(e){
+        console.error("createBattle",e);
+        toast("Battle start failed: "+(e.reason||e.message||"Unknown"),"err");
+      }
+      setBPending(false);
       return;
     }
     // ranked-ai — on-chain
@@ -501,7 +625,7 @@ const loadWhales = async () => {
     setBPending(false);
   };
 
-  const exitBattle=()=>{setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);setBattleId(null);};
+  const exitBattle=()=>{ if(pvpPollRef.current){ clearInterval(pvpPollRef.current); pvpPollRef.current=null; } setPvpWaiting(false); setPvpOpponent(null); setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);setBattleId(null); };
 
   const handleForfeit = async () => {
     if(!battleId) { exitBattle(); return; }
@@ -860,6 +984,32 @@ const loadWhales = async () => {
               </div>
             )}
 
+{bState==="pvp-waiting" && (
+  <div style={{textAlign:"center",paddingTop:60,animation:"fadeUp .4s"}}>
+    <div style={{position:"relative",width:120,height:120,margin:"0 auto 32px"}}>
+      <div style={{position:"absolute",inset:0,border:"2px solid rgba(139,92,246,.2)",borderTop:"2px solid #8b5cf6",borderRadius:"50%",animation:"spin 1.5s linear infinite"}}/>
+      <div style={{position:"absolute",inset:8,border:"2px solid rgba(139,92,246,.1)",borderBottom:"2px solid #8b5cf6",borderRadius:"50%",animation:"spin 2s linear infinite reverse"}}/>
+      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:48}}>⚔️</div>
+    </div>
+    <h2 style={{fontSize:22,fontWeight:700,color:"#f1f5f9",marginBottom:8}}>Finding Opponent…</h2>
+    <p style={{fontSize:14,color:"#64748b",marginBottom:32}}>Searching for a worthy challenger. This may take a moment.</p>
+    <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:32}}>
+      {[0,1,2].map(i=>(
+        <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#8b5cf6",animation:`spin ${0.8+i*0.2}s ease-in-out infinite alternate`,opacity:0.6+i*0.2}}/>
+      ))}
+    </div>
+    <button onClick={async()=>{
+      if(pvpPollRef.current){ clearInterval(pvpPollRef.current); pvpPollRef.current=null; }
+      try {
+        const signer = await provider.getSigner();
+        const arena  = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+        if(battleId){ await arena.cancelBattle(battleId); await loadBalance(); }
+        toast("Matchmaking cancelled — entry fee refunded.","info");
+      } catch(e){ toast("Cancel failed: "+(e.reason||e.message||""),"err"); }
+      exitBattle();
+    }} style={{padding:"10px 28px",borderRadius:10,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Cancel & Refund</button>
+  </div>
+)}
             {bState==="select" && (
               <div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -902,6 +1052,9 @@ const loadWhales = async () => {
                     </div>;
                   })}
                 </div>
+{bMode==="pvp" && !bResult && battleId && (
+  <InactivityTimer battleId={battleId} addr={addr} provider={provider} CONTRACTS={CONTRACTS} BATTLE_ABI={BATTLE_ABI} onClaimed={async()=>{ const arena=new Contract(CONTRACTS.BATTLE_ARENA,BATTLE_ABI,provider); const b=await arena.getBattle(battleId); const won=b.winner.toLowerCase()===addr.toLowerCase(); setBResult(won?"win":"lose"); await loadBalance(); }}/>
+)}
                 {!bResult && <div style={{display:"flex",gap:10,justifyContent:"center"}}>
                   {[["⚔️ Attack","atk","linear-gradient(135deg,#dc2626,#b91c1c)"],
                     [`🌀 ${pCard.ability}${bCd>0?` (${bCd})`:""}` ,"ab","linear-gradient(135deg,#7c3aed,#5b21b6)",bCd>0],
