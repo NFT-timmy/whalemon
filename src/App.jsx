@@ -755,7 +755,13 @@ const loadWhales = async () => {
             const signer = await provider.getSigner();
             const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
             const turn = Number(resumeBattle.battle.turn);
-            if(turn <= 2) {
+            const status = Number(resumeBattle.battle.status);
+            if(status === 0) { // Open — no opponent yet, just cancel
+              const tx = await arena.cancelBattle(Number(resumeBattle.battleId));
+              await tx.wait();
+              await loadBalance();
+              toast("Battle cancelled — entry fee refunded ✓","info");
+            } else if(turn <= 2) {
               const tx = await arena.forfeitBattle(Number(resumeBattle.battleId));
               await tx.wait();
               await loadBalance();
