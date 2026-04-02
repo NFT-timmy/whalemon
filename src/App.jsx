@@ -613,6 +613,8 @@ const loadCards = async () => {
       const [acc] = await window.ethereum.request({method:"eth_requestAccounts"});
       const prov  = await ensureTempo();
       setProvider(prov); setAddr(acc); setConnected(true);
+      sessionStorage.setItem("whalemon_connected","1");
+      sessionStorage.removeItem("whalemon_explore");
       toast("Connected to Tempo ✓");
       // Check for active battle
       try {
@@ -631,9 +633,8 @@ const loadCards = async () => {
   const handleDisconnect = () => {
     setConnected(false); setAddr(""); setBalance("0.00");
     setWhales([]); setCards([]); setMintedIds(new Set());
-    sessionStorage.removeItem("whalemon_explore");
-    setExploreMode(false);
-    window.location.hash = "";
+    sessionStorage.removeItem("whalemon_connected");
+    enterExplore(); // Stay on same page in explore mode
   };
 
   const handleMint = async (whaleId) => {
@@ -910,6 +911,22 @@ const loadCards = async () => {
   const [exploreMode, setExploreMode] = useState(()=> sessionStorage.getItem("whalemon_explore")==="1");
 
   const enterExplore = () => { sessionStorage.setItem("whalemon_explore","1"); setExploreMode(true); };
+
+  // Auto-reconnect on refresh if previously connected
+  useEffect(()=>{
+    if(sessionStorage.getItem("whalemon_connected")==="1" && window.ethereum && !connected){
+      window.ethereum.request({method:"eth_accounts"}).then(accounts=>{
+        if(accounts && accounts.length > 0){
+          ensureTempo().then(prov=>{
+            setProvider(prov); setAddr(accounts[0]); setConnected(true);
+          }).catch(()=>{});
+        } else {
+          sessionStorage.removeItem("whalemon_connected");
+          enterExplore();
+        }
+      }).catch(()=>{ sessionStorage.removeItem("whalemon_connected"); });
+    }
+  },[]);
 
   // When wallet connects, clear explore mode
   useEffect(()=>{ if(connected) sessionStorage.removeItem("whalemon_explore"); },[connected]);
