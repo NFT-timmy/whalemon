@@ -1351,7 +1351,10 @@ const loadCards = async () => {
                 <div style={{background:"#0a0e1f",borderRadius:16,border:"1px solid #1e293b",padding:28,width:360,maxWidth:"calc(100vw - 32px)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}><span style={{fontSize:18,fontWeight:700,color:"#f1f5f9"}}>List Card #{mktCard.id}</span><button onClick={()=>{setShowListModal(false);setListPrice("");}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:18}}>✕</button></div>
                   <div style={{marginBottom:16,padding:12,borderRadius:10,background:"#030712",border:"1px solid #1e293b",display:"flex",gap:10,alignItems:"center"}}>
-                    <div style={{width:48,height:48,borderRadius:8,background:`linear-gradient(${ELEMENTS[mktCard.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🐋</div>
+                    <div style={{width:48,height:48,borderRadius:8,background:`linear-gradient(${ELEMENTS[mktCard.element]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,overflow:"hidden",position:"relative",flexShrink:0}}>
+                      {mktCard.image && <img src={mktCard.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>o.target.style.display="none"}/>}
+                      <span style={{fontSize:22,position:"relative",zIndex:1}}>🐋</span>
+                    </div>
                     <div><div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>Whalemon #{mktCard.id}</div><div style={{fontSize:12,color:RARITY_COLORS[mktCard.rarity]}}>★ {RARITIES[mktCard.rarity]}</div></div>
                   </div>
                   <div style={{marginBottom:16}}>
@@ -1394,7 +1397,7 @@ const loadCards = async () => {
             </div>
             {/* Stats */}
             {mktStats && <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
-              {[["💰 Volume",`$${mktStats.volume}`,"#4ade80"],["🛒 Sales",mktStats.sales,"#38bdf8"],["📋 Listed",mktStats.listings,"#f59e0b"],["🤝 Offers",mktStats.offers,"#a855f7"]].map(([l,v,c])=>(
+              {[["💰 Volume",`$${mktStats.volume}`,"#4ade80"],["🛒 Sales",mktStats.sales,"#38bdf8"],["📋 Listed",listings.length,"#f59e0b"],["🤝 Offers",mktStats.offers,"#a855f7"]].map(([l,v,c])=>(
                 <div key={l} style={{flex:"1 1 110px",padding:"12px 14px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
                   <div style={{fontSize:12,color:"#475569",marginBottom:4}}>{l}</div>
                   <div style={{fontSize:20,fontWeight:800,color:c,fontFamily:"'JetBrains Mono',monospace"}}>{v}</div>
