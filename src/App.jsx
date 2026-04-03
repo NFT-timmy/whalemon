@@ -2223,14 +2223,7 @@ const loadCards = async () => {
                 <div style={{height:6,borderRadius:3,background:"#1e293b",overflow:"hidden"}}>
                   <div style={{width:"100%",height:"100%",background:"linear-gradient(90deg,#0ea5e9,#6366f1,#8b5cf6)",borderRadius:3,animation:"shimmer 3s linear infinite",backgroundSize:"200%"}}/>
                 </div>
-                <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
-                  {[["🥇 1st","30%"],["🥈 2nd","20%"],["🥉 3rd","15%"],["4th","10%"],["5th","7%"],["6–25th","Equal share"]].map(([r,s])=>(
-                    <div key={r} style={{flex:"1 1 80px",textAlign:"center",padding:"6px 8px",borderRadius:8,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b"}}>
-                      <div style={{fontSize:12,color:"#f1f5f9",fontWeight:600}}>{r}</div>
-                      <div style={{fontSize:11,color:"#475569"}}>{s}</div>
-                    </div>
-                  ))}
-                </div>
+                <div style={{marginTop:10,fontSize:13,color:"#475569"}}>Prizes distributed to top players at season end. Rankings determined by battle points.</div>
               </div>
             )}
 
