@@ -5,7 +5,7 @@ const TEMPO_CHAIN_ID = "0x1079";
 const CONTRACTS = {
   WHEL_NFT:    "0x3e12fcb20ad532f653f2907d2ae511364e2ae696",
   WHALE_CARDS: "0xf482221cf5150868956D80cdE00F589dC227D78A",
-  BATTLE_ARENA: "0x50C747880e56A510004cd4cB2C901f1b5f270545",
+  BATTLE_ARENA: "0x4Fd0425B9fa6817770b7319657A4db041C5396a3",
   MARKETPLACE: "0xF66E45889adDc6e330B38C0727567f2608EEC475",
   PATHUSD:     "0x20c0000000000000000000000000000000000000",
 };
@@ -47,6 +47,9 @@ const BATTLE_ABI = [
   "function setInactivityTimeout(uint256 _timeout) external",
   "function currentSeason() view returns (uint256)",
   "function seasonWins(uint256 season, address player) view returns (uint32)",
+  "function seasonPvPWins(uint256 season, address player) view returns (uint32)",
+  "function seasonAIWins(uint256 season, address player) view returns (uint32)",
+  "function participated(uint256 season, address player) view returns (bool)",
   "function claimPrize(uint256 season, uint256 rank) external",
   "function getPrizeAmount(uint256 season, uint256 rank) view returns (uint256)",
   "function seasonRankings(uint256 season, uint256 rank) view returns (address)",
@@ -58,6 +61,9 @@ const BATTLE_ABI = [
   "function getPoolInfo() view returns (uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
   "function prizePool() view returns (uint256)",
   "function seasonTimeRemaining() view returns (uint256)",
+  "event PlayerRanked(uint256 indexed season, uint256 indexed rank, address indexed player)",
+  "event PrizeClaimed(uint256 indexed season, uint256 rank, address indexed player, uint256 amount)",
+  "event BattleDraw(uint256 indexed battleId, address indexed player1, address indexed player2, uint256 refundEach)",
 ];
 const MARKETPLACE_ABI = [
   "function listCard(uint256 cardId, uint256 price) external returns (uint256)",
@@ -392,7 +398,9 @@ function BattleGuide({ onClose, ELEMENTS, RARITIES, RARITY_COLORS }) {
             {icon:"⏱",title:"Save Ability for the right moment",tip:"Your Ability does 1.8× damage but takes 3 turns to recharge. Use it when the opponent just defended (the shield is gone) or when you know they won't defend next turn."},
             {icon:"🛡",title:"Defend proactively",tip:"Defend when you suspect an Ability is coming. Watch the turn count — if your opponent hasn't used their Ability in 3+ turns, it's ready. A well-timed Defend halves that incoming nuke."},
             {icon:"💨",title:"Speed = first strike",tip:"In PvP the fastest Whalemon moves first. If your card has high SPD, you control the pace. Low SPD? You'll need to defend early and wait for your moment."},
-            {icon:"🏆",title:"Ranked vs Practice",tip:"Practice mode is free and local — great to test new strategies. Ranked battles cost 1 PATHUSD and count towards the season prize pool. Only go ranked when you're ready."},
+            {icon:"⭐",title:"Scoring: PvP vs AI",tip:"PvP wins are worth 3 points, AI wins are worth 1 point. Your season score = (PvP wins × 3) + (AI wins × 1). A skilled PvP player with 40 wins scores 120, beating an AI farmer with 100 wins scoring 100. Skill is rewarded."},
+            {icon:"🤝",title:"Draws",tip:"If both Whalemon knock each other out simultaneously, it's a draw. Draws award 0 ranking points. Both players are refunded 0.9 PATHUSD (90% of entry fee). The platform keeps 10%."},
+            {icon:"🏆",title:"Ranked vs Practice",tip:"Practice mode is free and local — great to test new strategies. Ranked battles cost 1 PATHUSD and count towards the season prize pool. Both PvP and AI wins count for rankings, but PvP wins are worth 3× more."},
             {icon:"⌛",title:"Don't let time run out",tip:"Battles end after 30 turns. If no one is knocked out, the Whalemon with more HP wins. If you're ahead on HP, play defensively in the late game."},
           ].map((t,i)=>(
             <div key={i} style={{display:"flex",gap:12,padding:"12px 14px",borderRadius:10,background:"#0a0e1f",border:"1px solid #1e293b"}}>
@@ -534,6 +542,21 @@ const pvpPollRef                         = useRef(null);
     if(page==="market") loadMarketplace();
     if(page==="leaderboard"){ loadLeaderboard(); if(connected && addr) loadClaims(); }
   },[connected,addr]);
+
+  // ── Wallet switch handling: reload data when address changes mid-session ──
+  useEffect(()=>{
+    if(!window.ethereum) return;
+    const handleAccountsChanged = (accounts) => {
+      if(accounts.length > 0 && connected) {
+        setAddr(accounts[0]);
+        // Data reloads happen via the connected/addr useEffect above
+      } else if(accounts.length === 0) {
+        setConnected(false); setAddr(""); setBalance("0.00");
+      }
+    };
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    return () => { window.ethereum.removeListener("accountsChanged", handleAccountsChanged); };
+  },[connected]);
 
   // ── blockchain ──────────────────────────────────────────────────────────────
   const ensureTempo = async () => {
@@ -715,9 +738,11 @@ const loadMarketplace = async () => {
         arena.getPoolInfo().catch(()=>null),
         arena.seasonTimeRemaining().catch(()=>0n),
       ]);
+      let currentSeasonNum = 1;
       if(poolInfo) {
         const pool = Number(poolInfo[0]) / 1e6;
         const season = Number(poolInfo[1]);
+        currentSeasonNum = season;
         const daysLeft = Math.ceil(Number(timeLeft) / 86400);
         setLbSeason({ pool: pool.toFixed(2), season, daysLeft });
       }
@@ -726,7 +751,7 @@ const loadMarketplace = async () => {
       const from  = Math.max(0, block - 50000);
       const events = await arena.queryFilter(arena.filters.BattleFinished(), from).catch(()=>[]);
       const stats = {};
-      const ensure = (a) => { if(!stats[a]) stats[a] = {wins:0,losses:0,addr:a}; };
+      const ensure = (a) => { if(!stats[a]) stats[a] = {wins:0,losses:0,pvpWins:0,aiWins:0,addr:a}; };
       for(const ev of events) {
         const bid = Number(ev.args.battleId);
         try {
@@ -734,18 +759,38 @@ const loadMarketplace = async () => {
           const p1 = b.player1.toLowerCase();
           const p2 = b.player2.toLowerCase();
           const winner = b.winner.toLowerCase();
+          const mode = Number(b.mode); // 0 = PvP, 1 = AI
           const zero = "0x0000000000000000000000000000000000000000";
           const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
-          if(winner===zero || p2===arenaAddr) continue;
+          if(winner===zero) continue; // draws — no wins
+          if(p2===arenaAddr) {
+            // AI battle
+            ensure(p1);
+            if(winner===p1){ stats[p1].wins++; stats[p1].aiWins++; }
+            else { stats[p1].losses++; }
+            continue;
+          }
           ensure(p1); ensure(p2);
-          if(winner===p1){ stats[p1].wins++; stats[p2].losses++; }
-          else           { stats[p2].wins++; stats[p1].losses++; }
+          if(winner===p1){ stats[p1].wins++; stats[p1].pvpWins++; stats[p2].losses++; }
+          else           { stats[p2].wins++; stats[p2].pvpWins++; stats[p1].losses++; }
+        } catch(_){}
+      }
+      // Also try reading on-chain season PvP/AI wins for current season
+      for(const a of Object.keys(stats)) {
+        try {
+          const pvp = Number(await arena.seasonPvPWins(currentSeasonNum, a));
+          const ai  = Number(await arena.seasonAIWins(currentSeasonNum, a));
+          if(pvp > 0 || ai > 0) {
+            stats[a].pvpWins = pvp;
+            stats[a].aiWins = ai;
+            stats[a].wins = pvp + ai;
+          }
         } catch(_){}
       }
       const list = Object.values(stats)
-        .map(s=>({...s, pts: s.wins*80 - s.losses*10, total: s.wins+s.losses}))
+        .map(s=>({...s, score: s.pvpWins*3 + s.aiWins*1, total: s.wins+s.losses}))
         .filter(s=>s.total>0)
-        .sort((a,b)=>b.pts-a.pts||b.wins-a.wins);
+        .sort((a,b)=>b.score-a.score||b.pvpWins-a.pvpWins||b.wins-a.wins);
       setLbData(list);
     } catch(e){ console.error("loadLeaderboard",e); }
     setLbLoading(false);
@@ -759,25 +804,81 @@ const loadMarketplace = async () => {
       const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
       const current = Number(await arena.currentSeason());
       const results = [];
-      for(let s=1; s<current; s++){
-        const totalRewarded = Number(await arena.seasonTotalRewarded(s));
-        if(totalRewarded===0) continue;
-        let myRank = -1;
-        for(let r=0; r<totalRewarded; r++){
-          const ranked = await arena.seasonRankings(s,r);
-          if(ranked.toLowerCase()===addr.toLowerCase()){ myRank=r; break; }
+
+      // Read PATHUSD decimals from contract for accurate display
+      const pathusd = new Contract(CONTRACTS.PATHUSD, PATHUSD_ABI, prov);
+      let decimals = 6;
+      try { decimals = Number(await pathusd.decimals()); } catch(_){}
+      const divisor = 10 ** decimals;
+
+      // Event-based approach: query PlayerRanked events for this player
+      const block = await prov.getBlockNumber();
+      const fromBlock = Math.max(0, block - 200000);
+      let rankedEvents = [];
+      try {
+        rankedEvents = await arena.queryFilter(
+          arena.filters.PlayerRanked(null, null, addr),
+          fromBlock
+        );
+      } catch(_){
+        // Fallback: if PlayerRanked event not available (old contract), use loop approach
+        for(let s=1; s<current; s++){
+          const totalRewarded = Number(await arena.seasonTotalRewarded(s));
+          if(totalRewarded===0) continue;
+          let myRank = -1;
+          for(let r=0; r<totalRewarded; r++){
+            const ranked = await arena.seasonRankings(s,r);
+            if(ranked.toLowerCase()===addr.toLowerCase()){ myRank=r; break; }
+          }
+          if(myRank===-1) continue;
+          const [prizeRaw, claimed, deadline] = await Promise.all([
+            arena.getPrizeAmount(s, myRank),
+            arena.prizeClaimed(s, myRank),
+            arena.seasonClaimDeadline(s),
+          ]);
+          const prizeAmt = (Number(prizeRaw)/divisor).toFixed(2);
+          const deadlineSecs = Number(deadline);
+          const expired = deadlineSecs>0 && Date.now()/1000>deadlineSecs;
+          results.push({ season:s, rank:myRank, displayRank:myRank+1, prize:prizeAmt, claimed, expired, deadlineTs:deadlineSecs*1000 });
         }
-        if(myRank===-1) continue;
-        const [prizeRaw, claimed, deadline] = await Promise.all([
-          arena.getPrizeAmount(s, myRank),
-          arena.prizeClaimed(s, myRank),
-          arena.seasonClaimDeadline(s),
-        ]);
-        const prizeAmt = (Number(prizeRaw)/1e6).toFixed(2);
-        const deadlineSecs = Number(deadline);
-        const expired = deadlineSecs>0 && Date.now()/1000>deadlineSecs;
-        results.push({ season:s, rank:myRank, displayRank:myRank+1, prize:prizeAmt, claimed, expired, deadlineTs:deadlineSecs*1000 });
+        setClaimSeasons(results);
+        setClaimLoading(false);
+        return;
       }
+
+      // Also query PrizeClaimed events for this player to know which are already claimed
+      let claimedEvents = [];
+      try {
+        claimedEvents = await arena.queryFilter(
+          arena.filters.PrizeClaimed(null, null, addr),
+          fromBlock
+        );
+      } catch(_){}
+      const claimedSet = new Set();
+      for(const ev of claimedEvents) {
+        claimedSet.add(`${Number(ev.args.season)}-${Number(ev.args.rank)}`);
+      }
+
+      // Build claim cards from PlayerRanked events
+      for(const ev of rankedEvents) {
+        const s = Number(ev.args.season);
+        const r = Number(ev.args.rank);
+        if(s >= current) continue; // Only show past seasons
+        try {
+          const [prizeRaw, deadline] = await Promise.all([
+            arena.getPrizeAmount(s, r),
+            arena.seasonClaimDeadline(s),
+          ]);
+          const claimed = claimedSet.has(`${s}-${r}`);
+          const prizeAmt = (Number(prizeRaw)/divisor).toFixed(2);
+          const deadlineSecs = Number(deadline);
+          const expired = deadlineSecs>0 && Date.now()/1000>deadlineSecs;
+          results.push({ season:s, rank:r, displayRank:r+1, prize:prizeAmt, claimed, expired, deadlineTs:deadlineSecs*1000 });
+        } catch(_){}
+      }
+
+      // Sort by season descending
+      results.sort((a,b) => b.season - a.season);
       setClaimSeasons(results);
     } catch(e){ console.error("loadClaims",e); }
     setClaimLoading(false);
@@ -1895,9 +1996,16 @@ const loadCards = async () => {
                     <button key={mv} onClick={()=>doMove(mv)} disabled={!!dis} style={{padding:"12px 22px",borderRadius:10,background:dis?"#1e293b":bg,border:"none",color:dis?"#475569":"#fff",fontSize:14,fontWeight:700,cursor:dis?"not-allowed":"pointer",fontFamily:F}}>{lbl}</button>
                   ))}
                 </div>}
-                {bResult && <div style={{textAlign:"center",padding:"20px 28px",borderRadius:14,background:bResult==="win"?"rgba(74,222,128,.06)":bResult==="lose"?"rgba(239,68,68,.06)":"rgba(255,255,255,.03)",border:`1px solid ${bResult==="win"?"rgba(74,222,128,.2)":bResult==="lose"?"rgba(239,68,68,.2)":"rgba(255,255,255,.06)"}`,marginTop:20,animation:"fadeUp .3s"}}>
+                {bResult && <div style={{textAlign:"center",padding:"20px 28px",borderRadius:14,background:bResult==="win"?"rgba(74,222,128,.06)":bResult==="lose"?"rgba(239,68,68,.06)":"rgba(245,158,11,.06)",border:`1px solid ${bResult==="win"?"rgba(74,222,128,.2)":bResult==="lose"?"rgba(239,68,68,.2)":"rgba(245,158,11,.2)"}`,marginTop:20,animation:"fadeUp .3s"}}>
                   <div style={{fontSize:44}}>{bResult==="win"?"🏆":bResult==="lose"?"💀":"🤝"}</div>
-                  <div style={{fontSize:22,fontWeight:800,color:bResult==="win"?"#4ade80":bResult==="lose"?"#f87171":"#94a3b8",marginTop:8}}>{bResult==="win"?"VICTORY!":bResult==="lose"?"DEFEATED":"DRAW"}</div>
+                  <div style={{fontSize:22,fontWeight:800,color:bResult==="win"?"#4ade80":bResult==="lose"?"#f87171":"#f59e0b",marginTop:8}}>{bResult==="win"?"VICTORY!":bResult==="lose"?"DEFEATED":"IT'S A DRAW"}</div>
+                  {bResult==="draw" && bMode!=="free" && (
+                    <div style={{marginTop:10,padding:"10px 16px",borderRadius:10,background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.15)"}}>
+                      <div style={{fontSize:13,color:"#f59e0b",fontWeight:600}}>0.9 PATHUSD refunded to each player</div>
+                      <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Both players receive 90% of their entry fee back. The platform keeps 10%.</div>
+                      <div style={{fontSize:11,color:"#64748b",marginTop:4}}>Draws award 0 ranking points.</div>
+                    </div>
+                  )}
                   <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:16}}>
                     <button onClick={()=>{exitBattle();startBattle(bMode);}} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Play Again</button>
                     <button onClick={exitBattle} style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Exit</button>
@@ -2267,10 +2375,16 @@ const loadCards = async () => {
                               {isMe ? "You ("+row.addr.slice(0,6)+"…)" : `${row.addr.slice(0,6)}…${row.addr.slice(-4)}`}
                               {isMe && <span style={{fontSize:10,color:"#0ea5e9",marginLeft:6,fontWeight:700}}>· YOU</span>}
                             </div>
-                            <div style={{fontSize:12,color:"#475569",marginTop:2}}>{row.wins}W · {row.losses}L · {winPct}% win rate</div>
+                            <div style={{fontSize:12,color:"#475569",marginTop:2}}>
+                              <span style={{color:"#a78bfa"}}>{row.pvpWins}W PvP</span>
+                              {" · "}
+                              <span style={{color:"#38bdf8"}}>{row.aiWins}W AI</span>
+                              {" · "}
+                              {row.losses}L · {winPct}%
+                            </div>
                           </div>
                           <div style={{textAlign:"right",flexShrink:0}}>
-                            <div style={{fontSize:15,fontWeight:800,color:"#f1f5f9",fontFamily:FM}}>{row.pts.toLocaleString()}</div>
+                            <div style={{fontSize:15,fontWeight:800,color:"#f1f5f9",fontFamily:FM}}>{row.score.toLocaleString()}</div>
                             <div style={{fontSize:11,color:"#475569"}}>pts</div>
                           </div>
                         </div>
