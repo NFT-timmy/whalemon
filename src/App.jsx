@@ -275,6 +275,14 @@ const [loadingMkt, setLoadingMkt]       = useState(false);
 const [mktTab, setMktTab]               = useState("browse");
 const [cardOffers, setCardOffers]       = useState({});
 const [showListModal, setShowListModal] = useState(false);
+const [showSendModal, setShowSendModal] = useState(false);
+const [sendRecipient, setSendRecipient] = useState("");
+const [sendPending, setSendPending]     = useState(false);
+const [activityFilter, setActivityFilter] = useState("all");
+const [activities, setActivities]       = useState([]);
+const [bulkSelected, setBulkSelected]   = useState(new Set());
+const [bulkPrice, setBulkPrice]         = useState("");
+const [bulkPending, setBulkPending]     = useState(false);
 const [showOfferModal, setShowOfferModal] = useState(false);
 const [mktCard, setMktCard]             = useState(null);
 const [listPrice, setListPrice]         = useState("");
@@ -462,6 +470,85 @@ const loadMarketplace = async () => {
         expiresAt: Number(o.expiresAt),
       }))}));
     } catch(e){ console.error("loadCardOffers", e); }
+  };
+
+  const loadActivities = async () => {
+    try {
+      const prov = await ensureTempo();
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, [
+        ...MARKETPLACE_ABI,
+        "event CardListed(uint256 indexed listingId, uint256 indexed cardId, address indexed seller, uint256 price)",
+        "event CardSold(uint256 indexed listingId, uint256 indexed cardId, address seller, address indexed buyer, uint256 price)",
+        "event ListingCancelled(uint256 indexed listingId, uint256 indexed cardId)",
+        "event OfferAccepted(uint256 indexed offerId, uint256 indexed cardId, address seller, address buyer, uint256 amount)",
+      ], prov);
+      const block = await prov.getBlockNumber();
+      const from  = Math.max(0, block - 10000);
+      const [listed, sold, cancelled, offerSold] = await Promise.all([
+        mkt.queryFilter(mkt.filters.CardListed(), from),
+        mkt.queryFilter(mkt.filters.CardSold(), from),
+        mkt.queryFilter(mkt.filters.ListingCancelled(), from),
+        mkt.queryFilter(mkt.filters.OfferAccepted(), from),
+      ]);
+      const acts = [
+        ...listed.map(e=>({ type:"LIST", cardId:Number(e.args.cardId), price:fromMkt(e.args.price), from:e.args.seller, to:"Marketplace", tx:e.transactionHash, block:e.blockNumber })),
+        ...sold.map(e=>({ type:"SALE", cardId:Number(e.args.cardId), price:fromMkt(e.args.price), from:e.args.seller, to:e.args.buyer, tx:e.transactionHash, block:e.blockNumber })),
+        ...cancelled.map(e=>({ type:"DELIST", cardId:Number(e.args.cardId), price:null, from:"Marketplace", to:null, tx:e.transactionHash, block:e.blockNumber })),
+        ...offerSold.map(e=>({ type:"OFFER_SALE", cardId:Number(e.args.cardId), price:fromMkt(e.args.amount), from:e.args.seller, to:e.args.buyer, tx:e.transactionHash, block:e.blockNumber })),
+      ].sort((a,b)=>b.block-a.block).slice(0,50);
+      setActivities(acts);
+    } catch(e){ console.error("loadActivities", e); }
+  };
+
+  const handleSendCard = async () => {
+    if(!sendRecipient || !sendRecipient.startsWith("0x") || sendRecipient.length !== 42) {
+      toast("Please enter a valid wallet address","err"); return;
+    }
+    setSendPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const wc = new Contract(CONTRACTS.WHALE_CARDS,[...WHALECARDS_ABI,"function transferFrom(address,address,uint256) external"],signer);
+      const tx = await wc.transferFrom(addr, sendRecipient, picked.id);
+      await tx.wait();
+      toast(`Card #${picked.id} sent successfully ✓`);
+      setShowSendModal(false); setSendRecipient(""); setPicked(null);
+      await loadCards();
+    } catch(e){ toast("Send failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setSendPending(false);
+  };
+
+  const handleBulkList = async () => {
+    if(!bulkPrice || isNaN(bulkPrice) || parseFloat(bulkPrice) <= 0) return;
+    if(bulkSelected.size === 0) return;
+    setBulkPending(true);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const wc  = new Contract(CONTRACTS.WHALE_CARDS, [...WHALECARDS_ABI,"function setApprovalForAll(address,bool) external","function isApprovedForAll(address,address) view returns (bool)"], signer);
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+      const isApproved = await wc.isApprovedForAll(addr, CONTRACTS.MARKETPLACE);
+      if(!isApproved){
+        toast("Approving marketplace to transfer cards…","info");
+        const appTx = await wc.setApprovalForAll(CONTRACTS.MARKETPLACE, true);
+        await appTx.wait();
+      }
+      const rawPrice = toMkt(bulkPrice);
+      const cardIds = Array.from(bulkSelected);
+      let listed = 0;
+      for(const cardId of cardIds) {
+        try {
+          toast(`Listing card #${cardId} (${listed+1}/${cardIds.length})…`,"info");
+          const tx = await mkt.listCard(cardId, rawPrice);
+          await tx.wait();
+          listed++;
+        } catch(e){ toast(`Failed to list #${cardId}: ${e.reason||e.message||""}`, "err"); }
+      }
+      toast(`${listed}/${cardIds.length} cards listed for $${bulkPrice} each ✓`);
+      setBulkSelected(new Set()); setBulkPrice("");
+      await Promise.all([loadMarketplace(), loadCards()]);
+    } catch(e){ toast("Bulk list failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setBulkPending(false);
   };
 
   const handleListCard = async () => {
@@ -1258,11 +1345,11 @@ const loadCards = async () => {
                 {cards.map(c=><Card key={c.id} card={c} onClick={()=>setPicked(c)}/>)}
               </div>
              {picked && (
-                  <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-start",justifyContent:"center",animation:"fadeIn .2s",padding:"60px 20px 20px"}} onClick={()=>setPicked(null)}>
+                  <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-start",justifyContent:"center",animation:"fadeIn .2s",padding:"60px 20px 20px"}} onClick={()=>{setPicked(null);setShowSendModal(false);setSendRecipient("");}}>
                     <div style={{background:"#0f172a",borderRadius:20,border:"1px solid #1e293b",maxWidth:800,width:"100%",maxHeight:"90vh",overflowY:"auto",animation:"fadeUp .25s"}} onClick={e=>e.stopPropagation()}>
                       {/* Close button */}
                       <div style={{display:"flex",justifyContent:"flex-end",padding:"16px 20px 0"}}>
-                        <button onClick={()=>setPicked(null)} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#94a3b8",cursor:"pointer",fontSize:14,padding:"6px 14px",fontFamily:F}}>✕ Close</button>
+                        <button onClick={()=>{setPicked(null);setShowSendModal(false);setSendRecipient("");}} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#94a3b8",cursor:"pointer",fontSize:14,padding:"6px 14px",fontFamily:F}}>✕ Close</button>
                       </div>
                       {/* Two-column layout */}
                       <div style={{display:"flex",gap:0,flexWrap:"wrap"}}>
@@ -1301,32 +1388,42 @@ const loadCards = async () => {
                           </div>
                           {/* Action buttons */}
                           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                            <button onClick={()=>{
-                              if(!connected){ toast("Connect your wallet to list cards","err"); return; }
-                              const existing = listings.find(l=>l.cardId===picked.id && l.seller.toLowerCase()===addr.toLowerCase());
-                              if(existing){ toast("Already listed! Cancel it first from Marketplace.","info"); return; }
-                              setMktCard(picked); setShowListModal(true); setPicked(null); navigate("market");
-                            }} style={{width:"100%",padding:"14px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>List for Sale</button>
-                            <div style={{display:"flex",gap:10}}>
-                              <button onClick={async()=>{
-                                if(!connected){ toast("Connect your wallet to send cards","err"); return; }
-                                const to = window.prompt("Enter recipient wallet address:");
-                                if(!to || !to.startsWith("0x")){ toast("Invalid address","err"); return; }
-                                try {
-                                  const prov = await ensureTempo();
-                                  const signer = await prov.getSigner();
-                                  const wc = new Contract(CONTRACTS.WHALE_CARDS,[...WHALECARDS_ABI,"function transferFrom(address,address,uint256) external"],signer);
-                                  const tx = await wc.transferFrom(addr, to, picked.id);
-                                  await tx.wait();
-                                  toast(`Card #${picked.id} sent ✓`);
-                                  setPicked(null); await loadCards();
-                                } catch(e){ toast("Send failed: "+(e.reason||e.message||"Unknown"),"err"); }
-                              }} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Send to Wallet</button>
-                              <button onClick={async()=>{
-                                await loadCardOffers(picked.id);
-                                setMktCard(picked); setMktTab("my-cards"); navigate("market"); setPicked(null);
-                              }} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>View Offers</button>
-                            </div>
+                            {showSendModal && picked ? (
+                              <div style={{padding:16,borderRadius:12,background:"rgba(14,165,233,.05)",border:"1px solid rgba(14,165,233,.15)"}}>
+                                <div style={{fontSize:14,fontWeight:700,color:"#38bdf8",marginBottom:12}}>↗ Send Whalemon #{picked.id}</div>
+                                <div style={{fontSize:12,color:"#64748b",marginBottom:6}}>Recipient Tempo address</div>
+                                <input
+                                  type="text"
+                                  value={sendRecipient}
+                                  onChange={e=>setSendRecipient(e.target.value)}
+                                  placeholder="0x..."
+                                  style={{width:"100%",padding:"10px 12px",borderRadius:8,background:"#030712",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,outline:"none",fontFamily:"'JetBrains Mono',monospace",marginBottom:10,boxSizing:"border-box"}}
+                                />
+                                <div style={{display:"flex",gap:8}}>
+                                  <button onClick={handleSendCard} disabled={sendPending||!sendRecipient} style={{flex:1,padding:"10px",borderRadius:8,background:sendPending||!sendRecipient?"#1e293b":"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:sendPending||!sendRecipient?"#475569":"#fff",fontSize:13,fontWeight:700,cursor:sendPending||!sendRecipient?"not-allowed":"pointer",fontFamily:F}}>{sendPending?"Sending…":"Confirm Send"}</button>
+                                  <button onClick={()=>{setShowSendModal(false);setSendRecipient("");}} style={{padding:"10px 14px",borderRadius:8,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:13,cursor:"pointer",fontFamily:F}}>Cancel</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <button onClick={()=>{
+                                  if(!connected){ toast("Connect your wallet to list cards","err"); return; }
+                                  const existing = listings.find(l=>l.cardId===picked.id && l.seller.toLowerCase()===addr.toLowerCase());
+                                  if(existing){ toast("Already listed! Cancel it first from Marketplace.","info"); return; }
+                                  setMktCard(picked); setShowListModal(true); setPicked(null); navigate("market");
+                                }} style={{width:"100%",padding:"14px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>List for Sale</button>
+                                <div style={{display:"flex",gap:10}}>
+                                  <button onClick={()=>{
+                                    if(!connected){ toast("Connect your wallet to send cards","err"); return; }
+                                    setShowSendModal(true);
+                                  }} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Send to Wallet</button>
+                                  <button onClick={async()=>{
+                                    await loadCardOffers(picked.id);
+                                    setMktCard(picked); setMktTab("my-cards"); navigate("market"); setPicked(null);
+                                  }} style={{flex:1,padding:"12px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#e2e8f0",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>View Offers</button>
+                                </div>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1533,8 +1630,8 @@ const loadCards = async () => {
             </div>}
             {/* Tabs */}
             <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
-              {[["browse","🏪 Browse"],["my-listings","📋 My Listings"],["my-cards","⚡ List My Cards"],["sales","📈 Recent Sales"]].map(([id,label])=>(
-                <button key={id} onClick={()=>{ setMktTab(id); if(id==="browse"||id==="sales") loadMarketplace(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:mktTab===id?"rgba(14,165,233,.12)":"transparent",color:mktTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:mktTab===id?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{label}</button>
+              {[["browse","🏪 Browse"],["my-listings","📋 My Listings"],["my-cards","⚡ List My Cards"],["activities","📈 Recent Activities"]].map(([id,label])=>(
+                <button key={id} onClick={()=>{ setMktTab(id); if(id==="browse") loadMarketplace(); if(id==="activities") loadActivities(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:mktTab===id?"rgba(14,165,233,.12)":"transparent",color:mktTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:mktTab===id?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{label}</button>
               ))}
             </div>
             {loadingMkt && <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/><div style={{fontSize:15}}>Loading marketplace…</div></div>}
@@ -1624,14 +1721,32 @@ const loadCards = async () => {
                 {cards.length===0
                   ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>🃏</div><div style={{fontSize:16,fontWeight:600}}>No cards available for listing</div><div style={{fontSize:14,color:"#334155",marginTop:4,marginBottom:16}}>{connected ? "Generate cards from your WHEL NFTs to start selling." : "Connect your wallet to list your cards."}</div>{connected && <button onClick={()=>navigate("whales")} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Generate from Whales →</button>}</div>
                   : <div>
-                    <p style={{fontSize:14,color:"#64748b",marginBottom:16}}>Click a card to list it for sale or view offers on it.</p>
+                    <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center",padding:"12px 14px",borderRadius:10,background:"rgba(14,165,233,.04)",border:"1px solid rgba(14,165,233,.1)"}}>
+                      <span style={{fontSize:13,color:"#64748b",flex:1}}>
+                        {bulkSelected.size===0 ? "Select cards below to bulk list them" : `${bulkSelected.size} card${bulkSelected.size>1?"s":""} selected`}
+                      </span>
+                      {bulkSelected.size>0 && <>
+                        <input type="number" value={bulkPrice} onChange={e=>setBulkPrice(e.target.value)} placeholder="Price each ($)" style={{padding:"7px 10px",borderRadius:8,background:"#030712",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,outline:"none",fontFamily:"'Inter',-apple-system,sans-serif",width:130}}/>
+                        <button onClick={handleBulkList} disabled={bulkPending||!bulkPrice} style={{padding:"8px 16px",borderRadius:8,background:bulkPending||!bulkPrice?"#1e293b":"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:bulkPending||!bulkPrice?"#475569":"#fff",fontSize:13,fontWeight:700,cursor:bulkPending||!bulkPrice?"not-allowed":"pointer",fontFamily:"'Inter',-apple-system,sans-serif",whiteSpace:"nowrap"}}>{bulkPending?"Listing…":"List All Selected"}</button>
+                        <button onClick={()=>setBulkSelected(new Set())} style={{padding:"8px 12px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Clear</button>
+                      </>}
+                    </div>
                     <div className="card-grid">
                       {cards.map(c=>{
                         const myListing = listings.find(l=>l.cardId===c.id && l.seller.toLowerCase()===addr.toLowerCase());
                         const myOffers  = cardOffers[c.id] || [];
+                        const isSelected = bulkSelected.has(c.id);
                         return (
                           <div key={c.id} style={{display:"flex",flexDirection:"column",gap:8}}>
-                            <Card card={c}/>
+                            <div style={{position:"relative",cursor:!myListing?"pointer":"default"}} onClick={()=>{
+                              if(myListing) return;
+                              setBulkSelected(prev=>{const n=new Set(prev); isSelected?n.delete(c.id):n.add(c.id); return n;});
+                            }}>
+                              <Card card={c}/>
+                              {!myListing && <div style={{position:"absolute",top:8,left:8,width:20,height:20,borderRadius:5,background:isSelected?"#0ea5e9":"rgba(0,0,0,.6)",border:`2px solid ${isSelected?"#0ea5e9":"rgba(255,255,255,.3)"}`,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s"}}>
+                                {isSelected && <span style={{color:"#fff",fontSize:12,fontWeight:700}}>✓</span>}
+                              </div>}
+                            </div>
                             {myListing
                               ? <div>
                                   <div style={{fontSize:13,color:"#4ade80",fontWeight:700,marginBottom:6}}>Listed: ${myListing.price}</div>
@@ -1661,23 +1776,71 @@ const loadCards = async () => {
                   </div>}
               </div>
             )}
-            {/* Recent Sales */}
-            {mktTab==="sales" && !loadingMkt && (
+            {/* Recent Activities */}
+            {mktTab==="activities" && (
               <div>
-                {recentSales.length===0
-                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>📈</div><div style={{fontSize:16,fontWeight:600}}>No sales yet</div></div>
-                  : <div style={{borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden"}}>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",padding:"10px 16px",borderBottom:"1px solid #1e293b",fontSize:12,color:"#475569",fontWeight:600}}>
-                      <span>Card</span><span>Price</span><span>Seller</span><span>Buyer</span>
-                    </div>
-                    {recentSales.map((s,i)=>(
-                      <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",padding:"12px 16px",borderBottom:"1px solid #0a0e27",alignItems:"center"}}>
-                        <span style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>#{s.cardId}</span>
-                        <span style={{fontSize:14,fontWeight:700,color:"#4ade80",fontFamily:"'JetBrains Mono',monospace"}}>${s.price}</span>
-                        <span style={{fontSize:12,color:"#64748b"}}>{s.seller.slice(0,6)}…{s.seller.slice(-4)}</span>
-                        <span style={{fontSize:12,color:"#64748b"}}>{s.buyer.slice(0,6)}…{s.buyer.slice(-4)}</span>
-                      </div>
+                {/* Filter tabs */}
+                <div style={{display:"flex",gap:6,marginBottom:16,alignItems:"center",justifyContent:"space-between",flexWrap:"wrap"}}>
+                  <div style={{display:"flex",gap:6}}>
+                    {[["all","All"],["SALE","Sales"],["LIST","Listings"],["DELIST","Delistings"]].map(([f,label])=>(
+                      <button key={f} onClick={()=>setActivityFilter(f)} style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${activityFilter===f?"rgba(14,165,233,.4)":"#1e293b"}`,background:activityFilter===f?"rgba(14,165,233,.1)":"transparent",color:activityFilter===f?"#38bdf8":"#64748b",fontSize:13,fontWeight:activityFilter===f?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{label}</button>
                     ))}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#4ade80"}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:"#4ade80",animation:"pulse 2s ease-in-out infinite"}}/>Live
+                  </div>
+                </div>
+                {activities.length===0
+                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>📈</div><div style={{fontSize:16,fontWeight:600}}>No recent activity</div><div style={{fontSize:13,color:"#334155",marginTop:4}}>Activities will appear here as cards are listed, sold and delisted.</div></div>
+                  : <div style={{borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden"}}>
+                    {/* Header */}
+                    <div style={{display:"grid",gridTemplateColumns:"90px 1fr 100px 120px 120px 90px 100px",padding:"10px 16px",borderBottom:"1px solid #1e293b",fontSize:11,color:"#475569",fontWeight:700,letterSpacing:.5,textTransform:"uppercase"}}>
+                      <span>Event</span><span>Item</span><span>Price</span><span>From</span><span>To</span><span>Time</span><span>Tx</span>
+                    </div>
+                    {activities
+                      .filter(a => activityFilter==="all"
+                        ? (a.type==="LIST"||a.type==="SALE"||a.type==="DELIST"||a.type==="OFFER_SALE")
+                        : activityFilter==="SALE" ? (a.type==="SALE"||a.type==="OFFER_SALE")
+                        : a.type===activityFilter)
+                      .map((a,i)=>{
+                        const cfg = {
+                          LIST:       {label:"LIST",     bg:"rgba(14,165,233,.12)",  color:"#38bdf8",  border:"rgba(14,165,233,.25)"},
+                          SALE:       {label:"SALE",     bg:"rgba(74,222,128,.12)",  color:"#4ade80",  border:"rgba(74,222,128,.25)"},
+                          DELIST:     {label:"DELIST",   bg:"rgba(239,68,68,.12)",   color:"#f87171",  border:"rgba(239,68,68,.25)"},
+                          OFFER_SALE: {label:"OFFER",    bg:"rgba(168,85,247,.12)",  color:"#a855f7",  border:"rgba(168,85,247,.25)"},
+                        }[a.type]||{label:a.type,bg:"#1e293b",color:"#94a3b8",border:"#1e293b"};
+                        const card = cards.find(c=>c.id===a.cardId);
+                        const timeAgo = (block) => {
+                          const secs = Math.max(0, Date.now()/1000 - block*2);
+                          if(secs < 60) return `${Math.floor(secs)}s ago`;
+                          if(secs < 3600) return `${Math.floor(secs/60)}m ago`;
+                          if(secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+                          return `${Math.floor(secs/86400)}d ago`;
+                        };
+                        return (
+                          <div key={i} style={{display:"grid",gridTemplateColumns:"90px 1fr 100px 120px 120px 90px 100px",padding:"10px 16px",borderBottom:"1px solid #0a0e27",alignItems:"center",transition:"background .15s"}}
+                            onMouseEnter={o=>o.currentTarget.style.background="rgba(255,255,255,.02)"}
+                            onMouseLeave={o=>o.currentTarget.style.background="transparent"}>
+                            <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+                              <span style={{padding:"3px 8px",borderRadius:6,background:cfg.bg,border:`1px solid ${cfg.border}`,color:cfg.color,fontSize:11,fontWeight:700}}>{cfg.label}</span>
+                            </span>
+                            <span style={{display:"flex",alignItems:"center",gap:8}}>
+                              <div style={{width:32,height:32,borderRadius:6,overflow:"hidden",background:`linear-gradient(${ELEMENTS[card?.element||0]?.grad||"135deg,#0c4a6e,#0ea5e9"})`,flexShrink:0,position:"relative"}}>
+                                {card?.image && <img src={card.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>o.target.style.display="none"}/>}
+                              </div>
+                              <span>
+                                <div style={{fontSize:13,fontWeight:600,color:"#f1f5f9"}}>Whalemon #{a.cardId}</div>
+                                <div style={{fontSize:11,color:ELEMENTS[card?.element||0]?.color||"#64748b"}}>{ELEMENTS[card?.element||0]?.icon} {ELEMENTS[card?.element||0]?.name||""} {card ? `· ${RARITIES[card.rarity]}` : ""}</div>
+                              </span>
+                            </span>
+                            <span style={{fontSize:13,fontWeight:700,color:cfg.color,fontFamily:"'JetBrains Mono',monospace"}}>{a.price ? `$${a.price}` : "—"}</span>
+                            <span style={{fontSize:12,color:"#64748b",fontFamily:"'JetBrains Mono',monospace"}}>{a.from ? `${a.from.slice(0,6)}…${a.from.slice(-4)}` : "—"}</span>
+                            <span style={{fontSize:12,color:"#64748b",fontFamily:"'JetBrains Mono',monospace"}}>{a.to ? `${a.to.slice(0,6)}…${a.to.slice(-4)}` : "—"}</span>
+                            <span style={{fontSize:12,color:"#475569"}}>{timeAgo(a.block)}</span>
+                            <a href={`https://tempo.xyz/tx/${a.tx}`} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"#38bdf8",fontFamily:"'JetBrains Mono',monospace",textDecoration:"none"}}>{a.tx.slice(0,8)}…↗</a>
+                          </div>
+                        );
+                      })}
                   </div>}
               </div>
             )}
