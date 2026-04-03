@@ -2447,7 +2447,7 @@ const loadCards = async () => {
                       ))}
                     </div>
                     {/* Season cards */}
-                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    <div style={{display:"flex",flexDirection:"column",gap:10,maxWidth:480,margin:"0 auto"}}>
                       {claimSeasons.map(c=>{
                         const isClaiming = lbClaiming===`${c.season}-${c.rank}`;
                         const statusColor = c.claimed?"#4ade80":c.expired?"#475569":"#f59e0b";
@@ -2455,27 +2455,27 @@ const loadCards = async () => {
                         const rankLabel = c.displayRank<=3?["🥇","🥈","🥉"][c.displayRank-1]+` ${c.displayRank}${["st","nd","rd"][c.displayRank-1]}`:`#${c.displayRank}`;
                         const deadline = c.deadlineTs ? new Date(c.deadlineTs).toLocaleDateString() : "—";
                         return (
-                          <div key={`${c.season}-${c.rank}`} style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:`1px solid ${statusColor}20`}}>
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                              <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9"}}>Season {c.season}</div>
-                              <div style={{padding:"4px 12px",borderRadius:20,background:`${statusColor}15`,border:`1px solid ${statusColor}30`,fontSize:12,fontWeight:700,color:statusColor}}>{statusLabel}</div>
+                          <div key={`${c.season}-${c.rank}`} style={{padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:`1px solid ${statusColor}20`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                              <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>Season {c.season}</div>
+                              <div style={{padding:"3px 10px",borderRadius:20,background:`${statusColor}15`,border:`1px solid ${statusColor}30`,fontSize:11,fontWeight:700,color:statusColor}}>{statusLabel}</div>
                             </div>
-                            <div style={{display:"flex",gap:10,marginBottom:c.claimed||c.expired?0:12}}>
-                              <div style={{flex:1,padding:"10px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center"}}>
-                                <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Your Rank</div>
-                                <div style={{fontSize:18,fontWeight:800,color:"#f1f5f9"}}>{rankLabel}</div>
+                            <div style={{display:"flex",gap:8,marginBottom:c.claimed||c.expired?0:10}}>
+                              <div style={{padding:"8px 10px",borderRadius:8,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center",minWidth:72}}>
+                                <div style={{fontSize:10,color:"#475569",marginBottom:2}}>Rank</div>
+                                <div style={{fontSize:15,fontWeight:800,color:"#f1f5f9"}}>{rankLabel}</div>
                               </div>
-                              <div style={{flex:1,padding:"10px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center"}}>
-                                <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Prize</div>
-                                <div style={{fontSize:18,fontWeight:800,color:"#f59e0b",fontFamily:FM}}>${c.prize}</div>
+                              <div style={{padding:"8px 10px",borderRadius:8,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center",minWidth:72}}>
+                                <div style={{fontSize:10,color:"#475569",marginBottom:2}}>Prize</div>
+                                <div style={{fontSize:15,fontWeight:800,color:"#f59e0b",fontFamily:FM}}>${c.prize}</div>
                               </div>
-                              <div style={{flex:1,padding:"10px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center"}}>
-                                <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Deadline</div>
-                                <div style={{fontSize:13,fontWeight:600,color:"#f1f5f9"}}>{deadline}</div>
+                              <div style={{padding:"8px 10px",borderRadius:8,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center",minWidth:72}}>
+                                <div style={{fontSize:10,color:"#475569",marginBottom:2}}>Deadline</div>
+                                <div style={{fontSize:12,fontWeight:600,color:"#f1f5f9"}}>{deadline}</div>
                               </div>
                             </div>
                             {!c.claimed && !c.expired && (
-                              <button onClick={()=>handleClaimPrize(c.season,c.rank)} disabled={!!isClaiming} style={{width:"100%",padding:"12px",borderRadius:10,background:isClaiming?"#1e293b":"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",color:isClaiming?"#475569":"#000",fontSize:14,fontWeight:700,cursor:isClaiming?"not-allowed":"pointer",fontFamily:F}}>
+                              <button onClick={()=>handleClaimPrize(c.season,c.rank)} disabled={!!isClaiming} style={{width:"100%",padding:"10px",borderRadius:10,background:isClaiming?"#1e293b":"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",color:isClaiming?"#475569":"#000",fontSize:13,fontWeight:700,cursor:isClaiming?"not-allowed":"pointer",fontFamily:F}}>
                                 {isClaiming?"Claiming…":`Claim $${c.prize} PATHUSD`}
                               </button>
                             )}
