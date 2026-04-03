@@ -19,7 +19,7 @@ const WHALECARDS_ABI = [
     "function balanceOf(address) view returns (uint256)",
     "function ownerOf(uint256) view returns (address)",
     "function getCardStats(uint256) view returns (uint16,uint16,uint16,uint16,uint8,uint8,bytes32,bool)",
-    "function hasMinted(uint256) view returns (bool)",
+    "function isCardMinted(uint256) view returns (bool)",
     "function mintCard(uint256) external",
     "event CardMinted(address indexed owner, uint256 indexed whaleId, uint256 indexed cardId)",
   ];
@@ -374,7 +374,7 @@ const loadWhales = async () => {
             }
           } catch(e){ console.warn("tokenURI failed for",id,e); }
           let minted_ = false;
-          try{ minted_ = await wCards.hasMinted(id); }catch(_){}
+          try{ minted_ = await wCards.isCardMinted(id); }catch(_){}
           if(minted_) minted.add(id);
           list.push({id, image:img});
         }
