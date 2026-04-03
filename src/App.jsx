@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-// v2
 import { BrowserProvider, Contract, formatUnits } from "ethers";
 
 const TEMPO_CHAIN_ID = "0x1079";
@@ -918,14 +917,13 @@ const loadCards = async () => {
     if(sessionStorage.getItem("whalemon_connected")==="1" && window.ethereum && !connected){
       window.ethereum.request({method:"eth_accounts"}).then(accounts=>{
         if(accounts && accounts.length > 0){
-          ensureTempo().then(prov=>{
-            setProvider(prov); setAddr(accounts[0]); setConnected(true);
-          }).catch(()=>{});
+          const prov = new BrowserProvider(window.ethereum);
+          setProvider(prov); setAddr(accounts[0]); setConnected(true);
         } else {
           sessionStorage.removeItem("whalemon_connected");
           enterExplore();
         }
-      }).catch(()=>{ sessionStorage.removeItem("whalemon_connected"); });
+      }).catch(()=>{ sessionStorage.removeItem("whalemon_connected"); enterExplore(); });
     }
   },[]);
 
