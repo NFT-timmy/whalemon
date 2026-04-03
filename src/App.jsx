@@ -478,6 +478,7 @@ export default function WhalemonTCG() {
 
   // battle
   const [bMode,setBMode]           = useState(null);
+  const [bIntro,setBIntro]         = useState(false);
   const [bState,setBState]         = useState(null);
   const [pCard,setPCard]           = useState(null);
   const [oCard,setOCard]           = useState(null);
@@ -1132,7 +1133,7 @@ const loadCards = async () => {
         health:hp,speed:Math.round((30+Math.random()*50)*m),
         ability:["Void Pulse","Riptide Slash","Thunder Breach","Ice Barb","Reef Sting","Crushing Jaw"][eIdx],
         hp});
-      setBState("fight"); setBLog([{t:0,s:"Battle started! (Practice)",tp:"sys"}]);
+      setBIntro(true); setTimeout(()=>{ setBIntro(false); setBState("fight"); setBLog([{t:0,s:"Battle started! (Practice)",tp:"sys"}]); }, 3000);
       return;
     }
 // ranked-pvp — on-chain matchmaking
@@ -1239,7 +1240,7 @@ const loadCards = async () => {
       const aiEl = Math.floor(Math.random()*6);
       setPCard({...c, hp:c.health});
       setOCard({id:"AI",element:aiEl,rarity:1,attack:50,defense:40,health:aiHp,speed:40,ability:"AI Strike",abilityDesc:"The AI attacks.",hp:aiHp});
-      setBState("fight"); setBLog([{t:0,s:"Ranked AI battle started! 1 PATHUSD entry fee paid.",tp:"sys"}]);
+      setBIntro(true); setTimeout(()=>{ setBIntro(false); setBState("fight"); setBLog([{t:0,s:"Ranked AI battle started! 1 PATHUSD entry fee paid.",tp:"sys"}]); }, 3000);
     } catch(e){
       console.error("createAIBattle",e);
       toast("Battle start failed: "+(e.reason||e.message||"Unknown"),"err");
@@ -1307,7 +1308,7 @@ const loadCards = async () => {
     setBPending(false);
   };
 
-  const exitBattle=()=>{ if(pvpPollRef.current){ clearInterval(pvpPollRef.current); pvpPollRef.current=null; } setPvpWaiting(false); setPvpOpponent(null); setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);setBattleId(null); };
+  const exitBattle=()=>{ if(pvpPollRef.current){ clearInterval(pvpPollRef.current); pvpPollRef.current=null; } setPvpWaiting(false); setPvpOpponent(null); setBIntro(false); setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);setBattleId(null); };
 
   const handleForfeit = async () => {
     if(!battleId) { exitBattle(); return; }
@@ -1790,6 +1791,23 @@ const loadCards = async () => {
                 </div>
               </div>
             )}
+
+{bIntro && (
+  <div style={{textAlign:"center",paddingTop:60,animation:"fadeUp .4s"}}>
+    <div style={{position:"relative",width:120,height:120,margin:"0 auto 32px"}}>
+      <div style={{position:"absolute",inset:0,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1.5s linear infinite"}}/>
+      <div style={{position:"absolute",inset:8,border:"2px solid rgba(14,165,233,.1)",borderBottom:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 2s linear infinite reverse"}}/>
+      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:48}}>⚔️</div>
+    </div>
+    <h2 style={{fontSize:22,fontWeight:700,color:"#f1f5f9",marginBottom:8}}>Battle Starting…</h2>
+    <p style={{fontSize:14,color:"#64748b",marginBottom:32}}>Prepare yourself. The arena awaits.</p>
+    <div style={{display:"flex",gap:6,justifyContent:"center"}}>
+      {[0,1,2].map(i=>(
+        <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#0ea5e9",animation:`spin ${0.8+i*0.2}s ease-in-out infinite alternate`,opacity:0.6+i*0.2}}/>
+      ))}
+    </div>
+  </div>
+)}
 
 {bState==="pvp-waiting" && (
   <div style={{textAlign:"center",paddingTop:60,animation:"fadeUp .4s"}}>
