@@ -914,17 +914,20 @@ const loadCards = async () => {
 
   // Auto-reconnect on refresh if previously connected
   useEffect(()=>{
-    if(sessionStorage.getItem("whalemon_connected")==="1" && window.ethereum && !connected){
-      window.ethereum.request({method:"eth_accounts"}).then(accounts=>{
-        if(accounts && accounts.length > 0){
-          const prov = new BrowserProvider(window.ethereum);
-          setProvider(prov); setAddr(accounts[0]); setConnected(true);
-        } else {
-          sessionStorage.removeItem("whalemon_connected");
-          enterExplore();
-        }
-      }).catch(()=>{ sessionStorage.removeItem("whalemon_connected"); enterExplore(); });
-    }
+    if(sessionStorage.getItem("whalemon_connected")!=="1") return;
+    if(!window.ethereum) { enterExplore(); return; }
+    window.ethereum.request({method:"eth_accounts"}).then(accounts=>{
+      if(accounts && accounts.length > 0){
+        // Use a minimal provider that doesn't trigger MetaMask
+        const prov = new BrowserProvider(window.ethereum, "any");
+        setProvider(prov);
+        setAddr(accounts[0]);
+        setConnected(true);
+      } else {
+        sessionStorage.removeItem("whalemon_connected");
+        enterExplore();
+      }
+    }).catch(()=>{ sessionStorage.removeItem("whalemon_connected"); enterExplore(); });
   },[]);
 
   // When wallet connects, clear explore mode
