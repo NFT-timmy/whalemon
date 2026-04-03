@@ -270,6 +270,7 @@ const [resumeBattle, setResumeBattle] = useState(null);
 const [listings, setListings]           = useState([]);
 const [recentSales, setRecentSales]     = useState([]);
 const [mktStats, setMktStats]           = useState(null);
+const [holderCount, setHolderCount]     = useState(null);
 const [loadingMkt, setLoadingMkt]       = useState(false);
 const [mktTab, setMktTab]               = useState("browse");
 const [cardOffers, setCardOffers]       = useState({});
@@ -280,6 +281,9 @@ const [listPrice, setListPrice]         = useState("");
 const [offerAmount, setOfferAmount]     = useState("");
 const [offerDays, setOfferDays]         = useState("3");
 const [mktPending, setMktPending]       = useState(false);
+const [mktSort, setMktSort]             = useState("price-asc");
+const [mktFilterEl, setMktFilterEl]     = useState(null);
+const [mktFilterRar, setMktFilterRar]   = useState(null);
 const [activeBattleId, setActiveBattleId] = useState(null);
 const [pvpWaiting, setPvpWaiting]       = useState(false);
 const [pvpOpponent, setPvpOpponent]     = useState(null);
@@ -376,25 +380,49 @@ const loadMarketplace = async () => {
     try {
       const prov = await ensureTempo();
       const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, prov);
+      const wc  = new Contract(CONTRACTS.WHALE_CARDS, [...WHALECARDS_ABI, "function totalSupply() view returns (uint256)", "function ownerOf(uint256) view returns (address)"], prov);
       const [rawListings, rawSales, rawStats] = await Promise.all([
         mkt.getActiveListings(0, 50),
-        mkt.getRecentSales(10),
+        mkt.getRecentSales(20),
         mkt.getMarketStats(),
       ]);
-      // Deduplicate by cardId — keep the most recent listing per card
-      const seen = new Set();
+      const dedupSeen = new Set();
       const deduped = [];
       for(const l of [...rawListings].reverse()) {
-        if(!seen.has(Number(l.cardId))) { seen.add(Number(l.cardId)); deduped.push(l); }
+        if(!dedupSeen.has(Number(l.cardId))) { dedupSeen.add(Number(l.cardId)); deduped.push(l); }
       }
-      setListings(deduped.reverse().map(l => ({
+      const mappedListings = deduped.reverse().map(l => ({
         listingId: Number(l.listingId),
         cardId: Number(l.cardId),
         seller: l.seller,
         price: fromMkt(l.price),
         rawPrice: l.price,
         status: Number(l.status),
-      })));
+      }));
+      setListings(mappedListings);
+
+      // Floor price
+      const floorPrice = mappedListings.length > 0
+        ? Math.min(...mappedListings.map(l=>parseFloat(l.price))).toFixed(2)
+        : null;
+
+      // 24h volume
+      const now = Date.now() / 1000;
+      const vol24h = rawSales
+        .filter(s => Number(s.soldAt) > now - 86400 && Number(s.soldAt) > 0)
+        .reduce((sum, s) => sum + parseFloat(fromMkt(s.price)), 0)
+        .toFixed(2);
+
+      // Top offer
+      let topOffer = null;
+      try {
+        const offerArrays = await Promise.all(mappedListings.slice(0,10).map(l => mkt.getCardOffers(l.cardId)));
+        const allOffers = offerArrays.flat().filter(o => !o.accepted && !o.cancelled && Number(o.expiresAt) > now);
+        if(allOffers.length > 0) topOffer = Math.max(...allOffers.map(o=>parseFloat(fromMkt(o.amount)))).toFixed(2);
+      } catch(e) {}
+
+      setMktStats({ floor: floorPrice, vol24h, sales: Number(rawStats.totalSales), topOffer });
+
       setRecentSales(rawSales.map(l => ({
         listingId: Number(l.listingId),
         cardId: Number(l.cardId),
@@ -403,12 +431,18 @@ const loadMarketplace = async () => {
         price: fromMkt(l.price),
         soldAt: Number(l.soldAt),
       })));
-      setMktStats({
-        volume: fromMkt(rawStats.totalVolume),
-        sales: Number(rawStats.totalSales),
-        listings: Number(rawStats.totalListings),
-        offers: Number(rawStats.totalOffers),
-      });
+
+      // Holder count
+      try {
+        const total = Number(await wc.totalSupply());
+        const owners = new Set();
+        for(let i = 0; i < Math.min(total, 500); i++) {
+          const o = await wc.ownerOf(i).catch(()=>null);
+          if(o) owners.add(o.toLowerCase());
+        }
+        setHolderCount(owners.size);
+      } catch(e) { console.log("holders", e); }
+
     } catch(e){ console.error("loadMarketplace", e); }
     setLoadingMkt(false);
   };
@@ -1483,11 +1517,17 @@ const loadCards = async () => {
               <button onClick={()=>{loadMarketplace();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif",fontWeight:600}}>↻ Refresh</button>
             </div>
             {/* Stats */}
-            {mktStats && <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
-              {[["💰 Volume",`$${mktStats.volume}`,"#4ade80"],["🛒 Sales",mktStats.sales,"#38bdf8"],["📋 Listed",listings.length,"#f59e0b"],["🤝 Offers",mktStats.offers,"#a855f7"]].map(([l,v,c])=>(
-                <div key={l} style={{flex:"1 1 110px",padding:"12px 14px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
-                  <div style={{fontSize:12,color:"#475569",marginBottom:4}}>{l}</div>
-                  <div style={{fontSize:20,fontWeight:800,color:c,fontFamily:"'JetBrains Mono',monospace"}}>{v}</div>
+            {mktStats && <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+              {[
+                ["🏷 Floor",mktStats.floor ? `$${mktStats.floor}` : "—","#4ade80"],
+                ["📊 24h Vol",`$${mktStats.vol24h}`,"#38bdf8"],
+                ["📋 Listed",listings.length,"#f59e0b"],
+                ["🤝 Top Offer",mktStats.topOffer ? `$${mktStats.topOffer}` : "—","#a855f7"],
+                ["👥 Holders",holderCount !== null ? holderCount : "…","#f472b6"],
+              ].map(([l,v,c])=>(
+                <div key={l} style={{flex:"1 1 90px",padding:"10px 12px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",minWidth:80}}>
+                  <div style={{fontSize:11,color:"#475569",marginBottom:3}}>{l}</div>
+                  <div style={{fontSize:17,fontWeight:800,color:c,fontFamily:"'JetBrains Mono',monospace"}}>{v}</div>
                 </div>
               ))}
             </div>}
@@ -1501,29 +1541,60 @@ const loadCards = async () => {
             {/* Browse */}
             {mktTab==="browse" && !loadingMkt && (
               <div>
-                {listings.length===0
-                  ? <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>🏪</div><div style={{fontSize:16,fontWeight:600,color:"#475569"}}>No listings yet</div><div style={{fontSize:14,color:"#334155",marginTop:4}}>Be the first to list a card!</div></div>
-                  : <div className="card-grid">
-                    {listings.map(l=>{
-                      const c = cards.find(x=>x.id===l.cardId) || {id:l.cardId,element:0,rarity:0,attack:0,defense:0,health:0,speed:0,ability:"",image:null};
-                      const isOwn = l.seller.toLowerCase()===addr.toLowerCase();
+                {/* Filters */}
+                <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+                  <select value={mktSort} onChange={e=>setMktSort(e.target.value)} style={{padding:"7px 12px",borderRadius:8,background:"#0a0e1f",border:"1px solid #1e293b",color:"#94a3b8",fontSize:13,fontFamily:"'Inter',-apple-system,sans-serif",outline:"none",cursor:"pointer"}}>
+                    <option value="price-asc">Price: Low → High</option>
+                    <option value="price-desc">Price: High → Low</option>
+                    <option value="rarity-desc">Rarity: High → Low</option>
+                    <option value="rarity-asc">Rarity: Low → High</option>
+                    <option value="power-desc">Power: Highest</option>
+                  </select>
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                    <button onClick={()=>setMktFilterEl(null)} style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${mktFilterEl===null?"rgba(14,165,233,.5)":"#1e293b"}`,background:mktFilterEl===null?"rgba(14,165,233,.1)":"transparent",color:mktFilterEl===null?"#38bdf8":"#64748b",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>All</button>
+                    {ELEMENTS.map((e,i)=><button key={i} onClick={()=>setMktFilterEl(mktFilterEl===i?null:i)} style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${mktFilterEl===i?e.color+"80":"#1e293b"}`,background:mktFilterEl===i?e.color+"15":"transparent",color:mktFilterEl===i?e.color:"#64748b",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{e.icon}</button>)}
+                  </div>
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                    {RARITIES.map((r,i)=><button key={i} onClick={()=>setMktFilterRar(mktFilterRar===i?null:i)} style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${mktFilterRar===i?RARITY_COLORS[i]+"80":"#1e293b"}`,background:mktFilterRar===i?RARITY_COLORS[i]+"15":"transparent",color:mktFilterRar===i?RARITY_COLORS[i]:"#64748b",fontSize:12,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{r}</button>)}
+                  </div>
+                </div>
+                {(() => {
+                  let filtered = listings.map(l => ({
+                    ...l,
+                    card: cards.find(x=>x.id===l.cardId) || {id:l.cardId,element:0,rarity:0,attack:0,defense:0,health:0,speed:0,ability:"",image:null}
+                  }));
+                  if(mktFilterEl!==null) filtered = filtered.filter(l=>l.card.element===mktFilterEl);
+                  if(mktFilterRar!==null) filtered = filtered.filter(l=>l.card.rarity===mktFilterRar);
+                  if(mktSort==="price-asc") filtered.sort((a,b)=>parseFloat(a.price)-parseFloat(b.price));
+                  else if(mktSort==="price-desc") filtered.sort((a,b)=>parseFloat(b.price)-parseFloat(a.price));
+                  else if(mktSort==="rarity-desc") filtered.sort((a,b)=>b.card.rarity-a.card.rarity);
+                  else if(mktSort==="rarity-asc") filtered.sort((a,b)=>a.card.rarity-b.card.rarity);
+                  else if(mktSort==="power-desc") filtered.sort((a,b)=>(b.card.attack+b.card.defense+b.card.health+b.card.speed)-(a.card.attack+a.card.defense+a.card.health+a.card.speed));
+                  if(filtered.length===0) return <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{fontSize:40,marginBottom:12}}>🔍</div><div style={{fontSize:16,fontWeight:600}}>No listings match your filters</div><button onClick={()=>{setMktFilterEl(null);setMktFilterRar(null);}} style={{marginTop:12,padding:"8px 20px",borderRadius:8,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:13,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Clear Filters</button></div>;
+                  return (
+                    <div className="card-grid">
+                      {filtered.map(({listingId,cardId,seller,price,rawPrice,card:c})=>{
+                        const isOwn = seller.toLowerCase()===(addr||"").toLowerCase();
+                        const l = {listingId,cardId,seller,price,rawPrice};
                       return (
-                        <div key={l.listingId} style={{display:"flex",flexDirection:"column",gap:8}}>
+                        <div key={listingId} style={{display:"flex",flexDirection:"column",gap:8}}>
                           <div style={{position:"relative"}}>
                             <Card card={c}/>
-                            <div style={{position:"absolute",bottom:8,left:8,padding:"3px 10px",borderRadius:20,background:"rgba(0,0,0,.75)",fontSize:13,color:"#4ade80",fontWeight:800,fontFamily:"'JetBrains Mono',monospace"}}>${l.price}</div>
+                            <div style={{position:"absolute",bottom:8,left:8,padding:"3px 10px",borderRadius:20,background:"rgba(0,0,0,.75)",fontSize:13,color:"#4ade80",fontWeight:800,fontFamily:"'JetBrains Mono',monospace"}}>${price}</div>
                           </div>
-                          <div style={{fontSize:11,color:"#334155"}}>{l.seller.slice(0,6)}…{l.seller.slice(-4)}</div>
+                          <div style={{fontSize:11,color:"#334155"}}>{seller.slice(0,6)}…{seller.slice(-4)}</div>
                           {isOwn
                             ? <button onClick={()=>handleCancelListing(l)} disabled={mktPending} style={{width:"100%",padding:"8px",borderRadius:8,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Cancel Listing</button>
                             : <div style={{display:"flex",gap:6}}>
                                 <button onClick={()=>handleBuyCard(l)} disabled={mktPending} style={{flex:1,padding:"8px",borderRadius:8,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Buy</button>
-                                <button onClick={()=>{setMktCard({...c,listingId:l.listingId});setShowOfferModal(true);}} style={{padding:"8px 10px",borderRadius:8,background:"rgba(139,92,246,.1)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:13,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Offer</button>
+                                <button onClick={()=>{setMktCard({...c,listingId});setShowOfferModal(true);}} style={{padding:"8px 10px",borderRadius:8,background:"rgba(139,92,246,.1)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",fontSize:13,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>Offer</button>
                               </div>}
                         </div>
                       );
                     })}
-                  </div>}
+                  </div>
+                  );
+                })()}
               </div>
             )}
             {/* My Listings */}
