@@ -488,10 +488,6 @@ const [sendRecipient, setSendRecipient] = useState("");
 const [sendPending, setSendPending]     = useState(false);
 const [activityFilter, setActivityFilter] = useState("all");
 const [activities, setActivities]       = useState([]);
-const [lbData, setLbData]               = useState([]);
-const [lbLoading, setLbLoading]         = useState(false);
-const [lbTab, setLbTab]                 = useState("pvp");
-const [lbSeason]                        = useState({ daysLeft:18, prizePool:350, filled:62 });
 const [bulkSelected, setBulkSelected]   = useState(new Set());
 const [bulkPrice, setBulkPrice]         = useState("");
 const [bulkPending, setBulkPending]     = useState(false);
@@ -515,7 +511,6 @@ const pvpPollRef                         = useRef(null);
   useEffect(()=>{
     if(connected && addr && provider){ loadBalance(); loadWhales(); loadCards(); }
     if(page==="market") loadMarketplace();
-    if(page==="leaderboard") loadLeaderboard(lbTab);
   },[connected,addr]);
 
   // ── blockchain ──────────────────────────────────────────────────────────────
@@ -1197,46 +1192,6 @@ const loadCards = async () => {
     setBPending(false);
   };
 
-
-  // ── leaderboard ──────────────────────────────────────────────────────────────
-  const loadLeaderboard = async (tab) => {
-    setLbLoading(true);
-    try {
-      const prov = await ensureTempo();
-      const arena = new Contract(CONTRACTS.BATTLE_ARENA, [
-        ...BATTLE_ABI,
-        "event BattleFinished(uint256 indexed battleId, address indexed winner, uint8 mode)",
-      ], prov);
-      const block = await prov.getBlockNumber();
-      const from  = Math.max(0, block - 50000);
-      const events = await arena.queryFilter(arena.filters.BattleFinished(), from).catch(()=>[]);
-      const modeFilter = tab === "pvp" ? 2 : tab === "ranked-ai" ? 1 : null;
-      const filtered = modeFilter !== null ? events.filter(e => Number(e.args.mode) === modeFilter) : events;
-      const stats = {};
-      const ensure = (a) => { if(!stats[a]) stats[a] = {wins:0, losses:0, addr:a}; };
-      for (const ev of filtered) {
-        const bid = Number(ev.args.battleId);
-        try {
-          const b = await arena.getBattle(bid);
-          const p1 = b.player1.toLowerCase();
-          const p2 = b.player2.toLowerCase();
-          const winner = b.winner.toLowerCase();
-          const zero = "0x0000000000000000000000000000000000000000";
-          if (winner === zero) continue;
-          ensure(p1); ensure(p2);
-          if (winner === p1) { stats[p1].wins++; stats[p2].losses++; }
-          else               { stats[p2].wins++; stats[p1].losses++; }
-        } catch(_) {}
-      }
-      const list = Object.values(stats)
-        .map(s => ({ ...s, pts: s.wins * 80 - s.losses * 10, total: s.wins + s.losses }))
-        .filter(s => s.total > 0)
-        .sort((a,b) => b.pts - a.pts || b.wins - a.wins);
-      setLbData(list);
-    } catch(e) { console.error("loadLeaderboard", e); }
-    setLbLoading(false);
-  };
-
   const exitBattle=()=>{ if(pvpPollRef.current){ clearInterval(pvpPollRef.current); pvpPollRef.current=null; } setPvpWaiting(false); setPvpOpponent(null); setBState(null);setBMode(null);setPCard(null);setOCard(null);setBLog([]);setBResult(null);setBattleId(null); };
 
   const handleForfeit = async () => {
@@ -1721,7 +1676,6 @@ const loadCards = async () => {
               </div>
             )}
 
-
 {bIntro && (
   <div style={{textAlign:"center",paddingTop:60,animation:"fadeUp .4s"}}>
     <div style={{position:"relative",width:120,height:120,margin:"0 auto 32px"}}>
@@ -2131,94 +2085,11 @@ const loadCards = async () => {
 
         {/* ── LEADERBOARD ── */}
         {page==="leaderboard" && (
-          <div className="page" style={{paddingBottom:40}}>
-            {/* Header */}
-            <div style={{textAlign:"center",padding:"28px 0 16px"}}>
-              <div style={{fontSize:26,fontWeight:800,letterSpacing:3,color:"#5ecfff",marginBottom:4}}>WHALEMON TCG</div>
-              <div style={{fontSize:11,letterSpacing:4,color:"#3a6a8a",textTransform:"uppercase",marginBottom:12}}>Leaderboard</div>
-              <div style={{display:"inline-block",padding:"4px 18px",border:"1px solid rgba(0,170,255,.25)",borderRadius:20,fontSize:11,letterSpacing:2,color:"#3ab0e0",background:"rgba(0,120,200,.06)"}}>SEASON 1 &nbsp;·&nbsp; {lbSeason.daysLeft} DAYS LEFT</div>
-            </div>
-            {/* Tabs */}
-            <div style={{display:"flex",borderBottom:"1px solid rgba(0,150,220,.18)",padding:"0 16px",marginBottom:0}}>
-              {[["pvp","Ranked PvP"],["ranked-ai","Ranked AI"],["all","All-time"]].map(([id,label])=>(
-                <button key={id} onClick={()=>{ setLbTab(id); loadLeaderboard(id); }}
-                  style={{padding:"8px 18px",fontSize:11,letterSpacing:2,color:lbTab===id?"#5ecfff":"#4a7a9b",background:"transparent",border:"none",borderBottom:`2px solid ${lbTab===id?"#5ecfff":"transparent"}`,cursor:"pointer",textTransform:"uppercase",fontFamily:F,transition:"all .2s"}}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {/* Prize chips */}
-            <div style={{display:"flex",gap:8,padding:"10px 12px",background:"rgba(0,60,120,.12)",borderBottom:"1px solid rgba(0,150,220,.08)"}}>
-              {[[1,"1st","#ffd060","rgba(255,200,0,.06)","rgba(255,215,0,.25)"],[2,"2nd","#b0b8cc","rgba(180,180,200,.06)","rgba(180,180,200,.25)"],[3,"3rd","#c0844a","rgba(180,120,60,.06)","rgba(180,120,60,.25)"],[4,"4th","#5ecfff","rgba(0,80,160,.15)","rgba(0,150,220,.12)"],[5,"5th","#5ecfff","rgba(0,80,160,.15)","rgba(0,150,220,.12)"]].map(([rank,label,clr,bg,bc])=>{
-                const amounts=[180,90,45,22,13];
-                return (
-                  <div key={rank} style={{flex:1,textAlign:"center",padding:"8px 4px",borderRadius:6,background:bg,border:`1px solid ${bc}`}}>
-                    <div style={{fontSize:9,color:"#4a7a9b",letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>{label}</div>
-                    <div style={{fontSize:12,fontWeight:600,color:clr}}>{amounts[rank-1]}</div>
-                    <div style={{fontSize:9,color:"#2a5070"}}>PATHUSD</div>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{textAlign:"center",fontSize:10,color:"#2a5070",letterSpacing:1,padding:"4px 0 2px"}}>Season prize pool: {lbSeason.prizePool} PATHUSD · {lbSeason.filled}% filled</div>
-            <div style={{margin:"2px 16px 0",background:"rgba(0,60,120,.25)",borderRadius:4,height:3,overflow:"hidden"}}>
-              <div style={{width:`${lbSeason.filled}%`,height:"100%",background:"linear-gradient(90deg,#1a6fa3,#5ecfff)",borderRadius:4}}/>
-            </div>
-            {/* List */}
-            <div style={{padding:"10px 8px 0"}}>
-              {lbLoading && (
-                <div style={{textAlign:"center",padding:60}}>
-                  <div style={{width:40,height:40,border:"2px solid rgba(0,170,255,.15)",borderTop:"2px solid #5ecfff",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 14px"}}/>
-                  <div style={{fontSize:13,color:"#3a6a8a",letterSpacing:1}}>Loading rankings…</div>
-                </div>
-              )}
-              {!lbLoading && lbData.length === 0 && (
-                <div style={{textAlign:"center",paddingTop:50}}>
-                  <div style={{fontSize:44,marginBottom:14}}>🌊</div>
-                  <div style={{fontSize:16,fontWeight:600,color:"#b0d8f0",marginBottom:6}}>No ranked battles yet</div>
-                  <div style={{fontSize:13,color:"#2a5070",marginBottom:24}}>Be the first to climb the leaderboard!</div>
-                  {!connected && <button onClick={handleConnect} style={{padding:"11px 28px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Connect Wallet →</button>}
-                </div>
-              )}
-              {!lbLoading && lbData.map((row, idx) => {
-                const rank = idx + 1;
-                const isMe = connected && addr && row.addr.toLowerCase() === addr.toLowerCase();
-                const winPct = row.total > 0 ? Math.round((row.wins / row.total) * 100) : 0;
-                const topEl = ELEMENTS[idx % ELEMENTS.length];
-                const rankColor = rank===1?"#ffd060":rank===2?"#b0b8cc":rank===3?"#c0844a":"#3a6a8a";
-                const rowBg = rank===1?"rgba(255,200,0,.06)":rank===2?"rgba(180,180,200,.06)":rank===3?"rgba(180,120,60,.06)":isMe?"rgba(0,160,255,.09)":"rgba(0,40,80,.2)";
-                const rowBorder = rank===1?"rgba(255,200,0,.22)":rank===2?"rgba(180,180,200,.18)":rank===3?"rgba(180,120,60,.18)":isMe?"rgba(0,200,255,.35)":"rgba(0,120,200,.08)";
-                const avatarEmojis = ["🐋","🌊","❄️","⚡","🪸","🌀","💜","🔥"];
-                return (
-                  <div key={row.addr} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",marginBottom:5,borderRadius:8,background:rowBg,border:`1px solid ${rowBorder}`}}>
-                    <div style={{fontSize:14,fontWeight:700,width:26,textAlign:"center",color:rankColor,flexShrink:0}}>
-                      {rank <= 3 ? ["🥇","🥈","🥉"][rank-1] : rank}
-                    </div>
-                    <div style={{width:34,height:34,borderRadius:"50%",border:"1px solid rgba(0,150,220,.18)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0,background:"rgba(0,60,120,.35)"}}>
-                      {avatarEmojis[idx % avatarEmojis.length]}
-                    </div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:12,fontWeight:600,color:isMe?"#5ecfff":"#b0d8f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                        {isMe ? "You" : `${row.addr.slice(0,6)}…${row.addr.slice(-4)}`}
-                        {isMe && <span style={{fontSize:9,color:"#3ab0e0",letterSpacing:1,marginLeft:5,textTransform:"uppercase"}}>· YOU</span>}
-                      </div>
-                      <div style={{marginTop:2}}>
-                        <span style={{fontSize:9,padding:"2px 7px",borderRadius:9,letterSpacing:1,textTransform:"uppercase",fontWeight:600,background:`${topEl.color}18`,color:topEl.color,border:`1px solid ${topEl.color}28`}}>{topEl.icon} {topEl.name}</span>
-                      </div>
-                    </div>
-                    <div style={{textAlign:"right",flexShrink:0}}>
-                      <div style={{fontSize:13,fontWeight:700,color:"#5ecfff"}}>{row.pts.toLocaleString()}</div>
-                      <div style={{fontSize:10,color:"#3a6a8a"}}>{row.wins}W / {row.losses}L <span style={{color:"#3ab060"}}>{winPct}%</span></div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {!lbLoading && (
-              <div style={{textAlign:"center",marginTop:16}}>
-                <button onClick={()=>loadLeaderboard(lbTab)} style={{padding:"8px 22px",borderRadius:8,background:"rgba(0,80,160,.15)",border:"1px solid rgba(0,150,220,.2)",color:"#3ab0e0",fontSize:12,cursor:"pointer",letterSpacing:1,fontFamily:F}}>↻ Refresh</button>
-              </div>
-            )}
+          <div className="page" style={{textAlign:"center",paddingTop:60}}>
+            <div style={{fontSize:56,marginBottom:20}}>🏆</div>
+            <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:10}}>Leaderboard</h2>
+            <p style={{fontSize:15,color:"#64748b",marginBottom:24}}>Season 1 standings will appear here once ranked battles begin. Be the first to climb!</p>
+            {!connected && <button onClick={handleConnect} style={{padding:"12px 32px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>Connect Wallet to Play →</button>}
           </div>
         )}
 
