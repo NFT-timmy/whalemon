@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { BrowserProvider, Contract, formatUnits } from "ethers";
 
 const TEMPO_CHAIN_ID = "0x1079";
 const CONTRACTS = {
   WHEL_NFT:    "0x3e12fcb20ad532f653f2907d2ae511364e2ae696",
   WHALE_CARDS: "0xf482221cf5150868956D80cdE00F589dC227D78A",
-  BATTLE_ARENA: "0x779E6287Cc92e3599E4671ce654D6F00f9A54b35",
+  BATTLE_ARENA: "0x50C747880e56A510004cd4cB2C901f1b5f270545",
   MARKETPLACE: "0xF66E45889adDc6e330B38C0727567f2608EEC475",
   PATHUSD:     "0x20c0000000000000000000000000000000000000",
 };
@@ -40,11 +40,24 @@ const BATTLE_ABI = [
   "function entryFee() view returns (uint256)",
   "function activeBattle(address) view returns (uint256)",
   "function forfeitBattle(uint256 battleId) external",
-"function abandonBattle(uint256 battleId) external",
-"function claimInactivityWin(uint256 battleId) external",
-"function inactivitySecondsRemaining(uint256 battleId) view returns (uint256)",
-"function inactivityTimeout() view returns (uint256)",
-"function setInactivityTimeout(uint256 _timeout) external",
+  "function abandonBattle(uint256 battleId) external",
+  "function claimInactivityWin(uint256 battleId) external",
+  "function inactivitySecondsRemaining(uint256 battleId) view returns (uint256)",
+  "function inactivityTimeout() view returns (uint256)",
+  "function setInactivityTimeout(uint256 _timeout) external",
+  "function currentSeason() view returns (uint256)",
+  "function seasonWins(uint256 season, address player) view returns (uint32)",
+  "function claimPrize(uint256 season, uint256 rank) external",
+  "function getPrizeAmount(uint256 season, uint256 rank) view returns (uint256)",
+  "function seasonRankings(uint256 season, uint256 rank) view returns (address)",
+  "function seasonPrizePool(uint256 season) view returns (uint256)",
+  "function prizeClaimed(uint256 season, uint256 rank) view returns (bool)",
+  "function seasonClaimDeadline(uint256 season) view returns (uint256)",
+  "function claimTimeRemaining(uint256 season) view returns (uint256)",
+  "function seasonTotalRewarded(uint256 season) view returns (uint256)",
+  "function getPoolInfo() view returns (uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
+  "function prizePool() view returns (uint256)",
+  "function seasonTimeRemaining() view returns (uint256)",
 ];
 const MARKETPLACE_ABI = [
   "function listCard(uint256 cardId, uint256 price) external returns (uint256)",
@@ -487,6 +500,13 @@ const [showSendModal, setShowSendModal] = useState(false);
 const [sendRecipient, setSendRecipient] = useState("");
 const [sendPending, setSendPending]     = useState(false);
 const [activityFilter, setActivityFilter] = useState("all");
+const [lbData, setLbData]               = useState([]);
+const [lbLoading, setLbLoading]         = useState(false);
+const [lbTab, setLbTab]                 = useState("rankings");
+const [lbSeason, setLbSeason]           = useState(null);
+const [claimSeasons, setClaimSeasons]   = useState([]);
+const [claimLoading, setClaimLoading]   = useState(false);
+const [lbClaiming, setLbClaiming]       = useState(null);
 const [activities, setActivities]       = useState([]);
 const [bulkSelected, setBulkSelected]   = useState(new Set());
 const [bulkPrice, setBulkPrice]         = useState("");
@@ -511,6 +531,7 @@ const pvpPollRef                         = useRef(null);
   useEffect(()=>{
     if(connected && addr && provider){ loadBalance(); loadWhales(); loadCards(); }
     if(page==="market") loadMarketplace();
+    if(page==="leaderboard"){ loadLeaderboard(); if(connected && addr) loadClaims(); }
   },[connected,addr]);
 
   // ── blockchain ──────────────────────────────────────────────────────────────
@@ -678,6 +699,101 @@ const loadMarketplace = async () => {
         expiresAt: Number(o.expiresAt),
       }))}));
     } catch(e){ console.error("loadCardOffers", e); }
+  };
+
+  const loadLeaderboard = async () => {
+    setLbLoading(true);
+    try {
+      const prov = await ensureTempo();
+      const arena = new Contract(CONTRACTS.BATTLE_ARENA, [
+        ...BATTLE_ABI,
+        "event BattleFinished(uint256 indexed battleId, address indexed winner, uint8 totalTurns)",
+      ], prov);
+      // Load pool info
+      const [poolInfo, timeLeft] = await Promise.all([
+        arena.getPoolInfo().catch(()=>null),
+        arena.seasonTimeRemaining().catch(()=>0n),
+      ]);
+      if(poolInfo) {
+        const pool = Number(poolInfo[0]) / 1e6;
+        const season = Number(poolInfo[1]);
+        const daysLeft = Math.ceil(Number(timeLeft) / 86400);
+        setLbSeason({ pool: pool.toFixed(2), season, daysLeft });
+      }
+      // Load battle events for rankings
+      const block = await prov.getBlockNumber();
+      const from  = Math.max(0, block - 50000);
+      const events = await arena.queryFilter(arena.filters.BattleFinished(), from).catch(()=>[]);
+      const stats = {};
+      const ensure = (a) => { if(!stats[a]) stats[a] = {wins:0,losses:0,addr:a}; };
+      for(const ev of events) {
+        const bid = Number(ev.args.battleId);
+        try {
+          const b = await arena.getBattle(bid);
+          const p1 = b.player1.toLowerCase();
+          const p2 = b.player2.toLowerCase();
+          const winner = b.winner.toLowerCase();
+          const zero = "0x0000000000000000000000000000000000000000";
+          const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
+          if(winner===zero || p2===arenaAddr) continue;
+          ensure(p1); ensure(p2);
+          if(winner===p1){ stats[p1].wins++; stats[p2].losses++; }
+          else           { stats[p2].wins++; stats[p1].losses++; }
+        } catch(_){}
+      }
+      const list = Object.values(stats)
+        .map(s=>({...s, pts: s.wins*80 - s.losses*10, total: s.wins+s.losses}))
+        .filter(s=>s.total>0)
+        .sort((a,b)=>b.pts-a.pts||b.wins-a.wins);
+      setLbData(list);
+    } catch(e){ console.error("loadLeaderboard",e); }
+    setLbLoading(false);
+  };
+
+  const loadClaims = async () => {
+    if(!connected||!addr||!provider) return;
+    setClaimLoading(true);
+    try {
+      const prov = await ensureTempo();
+      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+      const current = Number(await arena.currentSeason());
+      const results = [];
+      for(let s=1; s<current; s++){
+        const totalRewarded = Number(await arena.seasonTotalRewarded(s));
+        if(totalRewarded===0) continue;
+        let myRank = -1;
+        for(let r=0; r<totalRewarded; r++){
+          const ranked = await arena.seasonRankings(s,r);
+          if(ranked.toLowerCase()===addr.toLowerCase()){ myRank=r; break; }
+        }
+        if(myRank===-1) continue;
+        const [prizeRaw, claimed, deadline] = await Promise.all([
+          arena.getPrizeAmount(s, myRank),
+          arena.prizeClaimed(s, myRank),
+          arena.seasonClaimDeadline(s),
+        ]);
+        const prizeAmt = (Number(prizeRaw)/1e6).toFixed(2);
+        const deadlineSecs = Number(deadline);
+        const expired = deadlineSecs>0 && Date.now()/1000>deadlineSecs;
+        results.push({ season:s, rank:myRank, displayRank:myRank+1, prize:prizeAmt, claimed, expired, deadlineTs:deadlineSecs*1000 });
+      }
+      setClaimSeasons(results);
+    } catch(e){ console.error("loadClaims",e); }
+    setClaimLoading(false);
+  };
+
+  const handleClaimPrize = async (season, rank) => {
+    setLbClaiming(`${season}-${rank}`);
+    try {
+      const prov = await ensureTempo();
+      const signer = await prov.getSigner();
+      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+      const tx = await arena.claimPrize(season, rank);
+      await tx.wait();
+      toast(`Season ${season} prize claimed! 🎉`);
+      loadClaims(); loadBalance();
+    } catch(e){ toast("Claim failed: "+(e.reason||e.message||"Unknown"),"err"); }
+    setLbClaiming(null);
   };
 
   const loadActivities = async () => {
@@ -1000,7 +1116,6 @@ const loadCards = async () => {
   // ── battle ──────────────────────────────────────────────────────────────────
   const [battleId,setBattleId] = useState(null);
   const [bPending,setBPending] = useState(false);
-  const [bIntro,setBIntro]     = useState(false);
 
   const startBattle = m => { if(pvpPollRef.current){ clearInterval(pvpPollRef.current); pvpPollRef.current=null; } setPvpWaiting(false); setPvpOpponent(null); setBMode(m);setBState("select");setBLog([]);setBTurn(1);setBCd(0);setBResult(null);setPCard(null);setOCard(null);setBattleId(null); };
 
@@ -1017,7 +1132,7 @@ const loadCards = async () => {
         health:hp,speed:Math.round((30+Math.random()*50)*m),
         ability:["Void Pulse","Riptide Slash","Thunder Breach","Ice Barb","Reef Sting","Crushing Jaw"][eIdx],
         hp});
-      setBIntro(true); setTimeout(()=>{ setBIntro(false); setBState("fight"); setBLog([{t:0,s:"Battle started! (Practice)",tp:"sys"}]); }, 3000);
+      setBState("fight"); setBLog([{t:0,s:"Battle started! (Practice)",tp:"sys"}]);
       return;
     }
 // ranked-pvp — on-chain matchmaking
@@ -1124,7 +1239,7 @@ const loadCards = async () => {
       const aiEl = Math.floor(Math.random()*6);
       setPCard({...c, hp:c.health});
       setOCard({id:"AI",element:aiEl,rarity:1,attack:50,defense:40,health:aiHp,speed:40,ability:"AI Strike",abilityDesc:"The AI attacks.",hp:aiHp});
-      setBIntro(true); setTimeout(()=>{ setBIntro(false); setBState("fight"); setBLog([{t:0,s:"Ranked AI battle started! 1 PATHUSD entry fee paid.",tp:"sys"}]); }, 3000);
+      setBState("fight"); setBLog([{t:0,s:"Ranked AI battle started! 1 PATHUSD entry fee paid.",tp:"sys"}]);
     } catch(e){
       console.error("createAIBattle",e);
       toast("Battle start failed: "+(e.reason||e.message||"Unknown"),"err");
@@ -1676,23 +1791,6 @@ const loadCards = async () => {
               </div>
             )}
 
-{bIntro && (
-  <div style={{textAlign:"center",paddingTop:60,animation:"fadeUp .4s"}}>
-    <div style={{position:"relative",width:120,height:120,margin:"0 auto 32px"}}>
-      <div style={{position:"absolute",inset:0,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1.5s linear infinite"}}/>
-      <div style={{position:"absolute",inset:8,border:"2px solid rgba(14,165,233,.1)",borderBottom:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 2s linear infinite reverse"}}/>
-      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:48}}>⚔️</div>
-    </div>
-    <h2 style={{fontSize:22,fontWeight:700,color:"#f1f5f9",marginBottom:8}}>Battle Starting…</h2>
-    <p style={{fontSize:14,color:"#64748b",marginBottom:32}}>Prepare yourself. The arena awaits.</p>
-    <div style={{display:"flex",gap:6,justifyContent:"center"}}>
-      {[0,1,2].map(i=>(
-        <div key={i} style={{width:8,height:8,borderRadius:"50%",background:"#0ea5e9",animation:`spin ${0.8+i*0.2}s ease-in-out infinite alternate`,opacity:0.6+i*0.2}}/>
-      ))}
-    </div>
-  </div>
-)}
-
 {bState==="pvp-waiting" && (
   <div style={{textAlign:"center",paddingTop:60,animation:"fadeUp .4s"}}>
     <div style={{position:"relative",width:120,height:120,margin:"0 auto 32px"}}>
@@ -2085,11 +2183,169 @@ const loadCards = async () => {
 
         {/* ── LEADERBOARD ── */}
         {page==="leaderboard" && (
-          <div className="page" style={{textAlign:"center",paddingTop:60}}>
-            <div style={{fontSize:56,marginBottom:20}}>🏆</div>
-            <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:10}}>Leaderboard</h2>
-            <p style={{fontSize:15,color:"#64748b",marginBottom:24}}>Season 1 standings will appear here once ranked battles begin. Be the first to climb!</p>
-            {!connected && <button onClick={handleConnect} style={{padding:"12px 32px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:F}}>Connect Wallet to Play →</button>}
+          <div className="page">
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:10}}>
+              <div>
+                <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>Leaderboard</h2>
+                <p style={{fontSize:14,color:"#64748b"}}>
+                  {lbSeason ? `Season ${lbSeason.season} · ${lbSeason.daysLeft > 0 ? `${lbSeason.daysLeft} days left` : "Season ended"}` : "Season rankings"}
+                </p>
+              </div>
+              <button onClick={()=>{loadLeaderboard(); if(connected&&addr) loadClaims();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600}}>↻ Refresh</button>
+            </div>
+
+            {/* Prize pool bar */}
+            {lbSeason && (
+              <div style={{padding:"14px 18px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",marginBottom:20}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <span style={{fontSize:13,color:"#64748b"}}>Season Prize Pool</span>
+                  <span style={{fontSize:18,fontWeight:800,color:"#4ade80",fontFamily:FM}}>${lbSeason.pool} <span style={{fontSize:12,color:"#475569",fontWeight:400}}>PATHUSD</span></span>
+                </div>
+                <div style={{height:6,borderRadius:3,background:"#1e293b",overflow:"hidden"}}>
+                  <div style={{width:"100%",height:"100%",background:"linear-gradient(90deg,#0ea5e9,#6366f1,#8b5cf6)",borderRadius:3,animation:"shimmer 3s linear infinite",backgroundSize:"200%"}}/>
+                </div>
+                <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+                  {[["🥇 1st","30%"],["🥈 2nd","20%"],["🥉 3rd","15%"],["4th","10%"],["5th","7%"],["6–25th","Equal share"]].map(([r,s])=>(
+                    <div key={r} style={{flex:"1 1 80px",textAlign:"center",padding:"6px 8px",borderRadius:8,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b"}}>
+                      <div style={{fontSize:12,color:"#f1f5f9",fontWeight:600}}>{r}</div>
+                      <div style={{fontSize:11,color:"#475569"}}>{s}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tabs */}
+            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
+              {[["rankings","🏆 Rankings"],["claims","🎁 My Claims"]].map(([id,label])=>(
+                <button key={id} onClick={()=>{ setLbTab(id); if(id==="claims") loadClaims(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:lbTab===id?"rgba(14,165,233,.12)":"transparent",color:lbTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:lbTab===id?700:500,cursor:"pointer",fontFamily:F}}>{label}</button>
+              ))}
+            </div>
+
+            {/* Rankings Tab */}
+            {lbTab==="rankings" && (
+              <div>
+                {lbLoading && <div style={{textAlign:"center",padding:60}}><div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/><div style={{fontSize:14,color:"#475569"}}>Loading rankings…</div></div>}
+                {!lbLoading && lbData.length===0 && (
+                  <div style={{textAlign:"center",padding:80}}>
+                    <div style={{fontSize:48,marginBottom:16}}>🌊</div>
+                    <div style={{fontSize:18,fontWeight:600,color:"#475569",marginBottom:8}}>No ranked battles yet</div>
+                    <div style={{fontSize:14,color:"#334155",marginBottom:20}}>Be the first to climb the leaderboard and claim season prizes!</div>
+                    <button onClick={()=>navigate("battle")} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>⚔️ Start Battling →</button>
+                  </div>
+                )}
+                {!lbLoading && lbData.length>0 && (
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {lbData.map((row,idx)=>{
+                      const rank = idx+1;
+                      const isMe = connected && addr && row.addr.toLowerCase()===addr.toLowerCase();
+                      const winPct = row.total>0 ? Math.round((row.wins/row.total)*100) : 0;
+                      const rankColor = rank===1?"#f59e0b":rank===2?"#94a3b8":rank===3?"#cd7f32":"#475569";
+                      const rowBg = rank===1?"rgba(245,158,11,.06)":rank===2?"rgba(148,163,184,.04)":rank===3?"rgba(205,127,50,.05)":isMe?"rgba(14,165,233,.06)":"rgba(255,255,255,.02)";
+                      const rowBorder = rank===1?"rgba(245,158,11,.2)":rank===2?"rgba(148,163,184,.15)":rank===3?"rgba(205,127,50,.15)":isMe?"rgba(14,165,233,.25)":"#1e293b";
+                      const el = ELEMENTS[idx % ELEMENTS.length];
+                      return (
+                        <div key={row.addr} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderRadius:10,background:rowBg,border:`1px solid ${rowBorder}`,transition:"background .15s"}}>
+                          <div style={{fontSize:rank<=3?20:14,fontWeight:700,width:28,textAlign:"center",color:rankColor,flexShrink:0}}>
+                            {rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":rank}
+                          </div>
+                          <div style={{width:36,height:36,borderRadius:"50%",background:`${el.color}15`,border:`1px solid ${el.color}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{el.icon}</div>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:600,color:isMe?"#38bdf8":"#f1f5f9",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                              {isMe ? "You ("+row.addr.slice(0,6)+"…)" : `${row.addr.slice(0,6)}…${row.addr.slice(-4)}`}
+                              {isMe && <span style={{fontSize:10,color:"#0ea5e9",marginLeft:6,fontWeight:700}}>· YOU</span>}
+                            </div>
+                            <div style={{fontSize:12,color:"#475569",marginTop:2}}>{row.wins}W · {row.losses}L · {winPct}% win rate</div>
+                          </div>
+                          <div style={{textAlign:"right",flexShrink:0}}>
+                            <div style={{fontSize:15,fontWeight:800,color:"#f1f5f9",fontFamily:FM}}>{row.pts.toLocaleString()}</div>
+                            <div style={{fontSize:11,color:"#475569"}}>pts</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Claims Tab */}
+            {lbTab==="claims" && (
+              <div>
+                {!connected && (
+                  <div style={{textAlign:"center",padding:80}}>
+                    <div style={{fontSize:48,marginBottom:16}}>🔒</div>
+                    <div style={{fontSize:16,fontWeight:600,color:"#475569",marginBottom:16}}>Connect your wallet to see your prize claims</div>
+                    <button onClick={handleConnect} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Connect Wallet →</button>
+                  </div>
+                )}
+                {connected && claimLoading && (
+                  <div style={{textAlign:"center",padding:60}}><div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/><div style={{fontSize:14,color:"#475569"}}>Scanning past seasons…</div></div>
+                )}
+                {connected && !claimLoading && claimSeasons.length===0 && (
+                  <div style={{textAlign:"center",padding:80}}>
+                    <div style={{fontSize:48,marginBottom:16}}>🎁</div>
+                    <div style={{fontSize:16,fontWeight:600,color:"#475569",marginBottom:8}}>No prize history yet</div>
+                    <div style={{fontSize:14,color:"#334155"}}>Win ranked battles and finish in the top 25 each season to earn PATHUSD prizes.</div>
+                  </div>
+                )}
+                {connected && !claimLoading && claimSeasons.length>0 && (
+                  <div>
+                    {/* Summary */}
+                    <div style={{display:"flex",gap:10,marginBottom:20}}>
+                      {[
+                        ["Seasons Ranked", claimSeasons.length, "#38bdf8"],
+                        ["Total Earned", `$${claimSeasons.reduce((s,c)=>s+parseFloat(c.prize),0).toFixed(2)}`, "#f59e0b"],
+                        ["Unclaimed", claimSeasons.filter(c=>!c.claimed&&!c.expired).length, "#4ade80"],
+                      ].map(([l,v,c])=>(
+                        <div key={l} style={{flex:1,padding:"12px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",textAlign:"center"}}>
+                          <div style={{fontSize:20,fontWeight:800,color:c,fontFamily:FM,marginBottom:4}}>{v}</div>
+                          <div style={{fontSize:11,color:"#475569"}}>{l}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Season cards */}
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      {claimSeasons.map(c=>{
+                        const isClaiming = lbClaiming===`${c.season}-${c.rank}`;
+                        const statusColor = c.claimed?"#4ade80":c.expired?"#475569":"#f59e0b";
+                        const statusLabel = c.claimed?"Claimed ✓":c.expired?"Expired":"Unclaimed";
+                        const rankLabel = c.displayRank<=3?["🥇","🥈","🥉"][c.displayRank-1]+` ${c.displayRank}${["st","nd","rd"][c.displayRank-1]}`:`#${c.displayRank}`;
+                        const deadline = c.deadlineTs ? new Date(c.deadlineTs).toLocaleDateString() : "—";
+                        return (
+                          <div key={`${c.season}-${c.rank}`} style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:`1px solid ${statusColor}20`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                              <div style={{fontSize:15,fontWeight:700,color:"#f1f5f9"}}>Season {c.season}</div>
+                              <div style={{padding:"4px 12px",borderRadius:20,background:`${statusColor}15`,border:`1px solid ${statusColor}30`,fontSize:12,fontWeight:700,color:statusColor}}>{statusLabel}</div>
+                            </div>
+                            <div style={{display:"flex",gap:10,marginBottom:c.claimed||c.expired?0:12}}>
+                              <div style={{flex:1,padding:"10px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center"}}>
+                                <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Your Rank</div>
+                                <div style={{fontSize:18,fontWeight:800,color:"#f1f5f9"}}>{rankLabel}</div>
+                              </div>
+                              <div style={{flex:1,padding:"10px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center"}}>
+                                <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Prize</div>
+                                <div style={{fontSize:18,fontWeight:800,color:"#f59e0b",fontFamily:FM}}>${c.prize}</div>
+                              </div>
+                              <div style={{flex:1,padding:"10px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",textAlign:"center"}}>
+                                <div style={{fontSize:11,color:"#475569",marginBottom:4}}>Deadline</div>
+                                <div style={{fontSize:13,fontWeight:600,color:"#f1f5f9"}}>{deadline}</div>
+                              </div>
+                            </div>
+                            {!c.claimed && !c.expired && (
+                              <button onClick={()=>handleClaimPrize(c.season,c.rank)} disabled={!!isClaiming} style={{width:"100%",padding:"12px",borderRadius:10,background:isClaiming?"#1e293b":"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",color:isClaiming?"#475569":"#000",fontSize:14,fontWeight:700,cursor:isClaiming?"not-allowed":"pointer",fontFamily:F}}>
+                                {isClaiming?"Claiming…":`Claim $${c.prize} PATHUSD`}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
