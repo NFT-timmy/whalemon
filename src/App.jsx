@@ -1301,7 +1301,7 @@ const loadCards = async () => {
                   </div>
                   <div style={{padding:12}}>
                     {mintedIds.has(w.id)
-                      ? <div style={{padding:"8px 0",textAlign:"center",fontSize:13,color:"#4ade80",fontWeight:600,borderRadius:8,background:"rgba(74,222,128,.06)",border:"1px solid rgba(74,222,128,.15)"}}>✓ Card Minted</div>
+                      ? <div style={{padding:"9px 0",textAlign:"center",fontSize:13,fontWeight:700,borderRadius:9,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",letterSpacing:.3}}>🐋 Whalemon Birthed</div>
                       : <button onClick={()=>handleMint(w.id)} disabled={minting===w.id} style={{width:"100%",padding:"9px 0",borderRadius:9,background:minting===w.id?"#1e293b":"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:minting===w.id?"#475569":"#fff",fontSize:14,fontWeight:700,cursor:minting===w.id?"not-allowed":"pointer",fontFamily:F}}>
                           {minting===w.id?"Minting…":"⚡ Generate Card"}
                         </button>}
