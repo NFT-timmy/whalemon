@@ -743,8 +743,20 @@ const loadMarketplace = async () => {
         const pool = Number(poolInfo[0]) / 1e6;
         const season = Number(poolInfo[1]);
         currentSeasonNum = season;
-        const daysLeft = Math.ceil(Number(timeLeft) / 86400);
-        setLbSeason({ pool: pool.toFixed(2), season, daysLeft });
+        const seasonEndTs = Number(poolInfo[2]);
+        const timeLeftSecs = Number(timeLeft);
+        const daysLeft = Math.ceil(timeLeftSecs / 86400);
+        const totalDurationSecs = seasonEndTs > 0 ? (seasonEndTs - (seasonEndTs - timeLeftSecs - (Date.now()/1000 - (seasonEndTs - timeLeftSecs)))) : 30*86400;
+        // Simple: seasonDuration = seasonEnd - seasonStart. We know timeLeft and seasonEnd.
+        // seasonStart = seasonEnd - seasonDuration. timeLeft = seasonEnd - now. elapsed = now - seasonStart = seasonDuration - timeLeft.
+        // We can get seasonDuration from poolInfo index 2 (seasonEnd) minus when season started.
+        // But simpler: total = entryFee field is index 4... let's just use 30 days default or compute from end timestamp.
+        const seasonDurationSecs = timeLeftSecs > 0 ? Math.max(timeLeftSecs, 30*86400) : 30*86400;
+        // Better approach: elapsed% = 1 - (timeLeft / seasonDuration). We'll estimate seasonDuration as 30 days.
+        const defaultDuration = 30 * 86400;
+        const elapsed = defaultDuration - timeLeftSecs;
+        const pct = timeLeftSecs > 0 ? Math.min(100, Math.max(0, (elapsed / defaultDuration) * 100)) : 100;
+        setLbSeason({ pool: pool.toFixed(2), season, daysLeft, timeLeftSecs, pct });
       }
       // Load battle events for rankings
       const block = await prov.getBlockNumber();
@@ -2329,9 +2341,13 @@ const loadCards = async () => {
                   <span style={{fontSize:18,fontWeight:800,color:"#4ade80",fontFamily:FM}}>${lbSeason.pool} <span style={{fontSize:12,color:"#475569",fontWeight:400}}>PATHUSD</span></span>
                 </div>
                 <div style={{height:6,borderRadius:3,background:"#1e293b",overflow:"hidden"}}>
-                  <div style={{width:"100%",height:"100%",background:"linear-gradient(90deg,#0ea5e9,#6366f1,#8b5cf6)",borderRadius:3,animation:"shimmer 3s linear infinite",backgroundSize:"200%"}}/>
+                  <div style={{width:`${lbSeason.pct}%`,height:"100%",background:"linear-gradient(90deg,#0ea5e9,#6366f1,#8b5cf6)",borderRadius:3,transition:"width 1s ease"}}/>
                 </div>
-                <div style={{marginTop:10,fontSize:13,color:"#475569"}}>Prizes distributed to top players at season end. Rankings determined by battle points.</div>
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
+                  <span style={{fontSize:11,color:"#475569"}}>{lbSeason.pct < 100 ? `${Math.round(lbSeason.pct)}% elapsed` : "Season ended"}</span>
+                  <span style={{fontSize:11,color:lbSeason.daysLeft<=3?"#f59e0b":"#475569",fontWeight:lbSeason.daysLeft<=3?600:400}}>{lbSeason.daysLeft > 0 ? `${lbSeason.daysLeft} days left` : "Awaiting results"}</span>
+                </div>
+                <div style={{marginTop:8,fontSize:12,color:"#475569"}}>Pool grows with every battle. PvP win = 3 pts · AI win = 1 pt. Top players share the pool at season end.</div>
               </div>
             )}
 
