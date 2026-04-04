@@ -5,7 +5,7 @@ const TEMPO_CHAIN_ID = "0x1079";
 const CONTRACTS = {
   WHEL_NFT:    "0x3e12fcb20ad532f653f2907d2ae511364e2ae696",
   WHALE_CARDS: "0xf482221cf5150868956D80cdE00F589dC227D78A",
-  BATTLE_ARENA: "0x4Fd0425B9fa6817770b7319657A4db041C5396a3",
+  BATTLE_ARENA: "0x5455570F937465eA32632F58499caeF76f547FE2",
   MARKETPLACE: "0xF66E45889adDc6e330B38C0727567f2608EEC475",
   PATHUSD:     "0x20c0000000000000000000000000000000000000",
 };
@@ -30,12 +30,12 @@ const PATHUSD_ABI = [
   "function allowance(address owner, address spender) view returns (uint256)",
 ];
 const BATTLE_ABI = [
-  "function createAIBattle(uint256 cardId) external returns (uint256)",
+  "function createAIBattle(uint256 cardId, uint32 multiplier) external returns (uint256)",
   "function makeMove(uint256 battleId, uint8 move) external",
-  "function getBattle(uint256 battleId) external view returns (tuple(uint256 battleId,address player1,address player2,uint256 card1,uint256 card2,int16 hp1,int16 hp2,uint8 turn,uint8 lastAbility1,uint8 lastAbility2,bool isPlayer1Turn,uint8 defenseBoost1,uint8 defenseBoost2,uint8 status,uint8 mode,address winner,uint256 createdAt,uint256 finishedAt,uint256 lastMoveAt))",
-  "function getOpenBattles(uint256 offset, uint256 limit) external view returns (tuple(uint256,address,address,uint256,uint256,int16,int16,uint8,uint8,uint8,bool,uint8,uint8,uint8,uint8,address,uint256,uint256,uint256)[])",
+  "function getBattle(uint256 battleId) external view returns (tuple(uint256 battleId,address player1,address player2,uint256 card1,uint256 card2,int16 hp1,int16 hp2,uint8 turn,uint8 lastAbility1,uint8 lastAbility2,bool isPlayer1Turn,uint8 defenseBoost1,uint8 defenseBoost2,uint8 status,uint8 mode,address winner,uint256 createdAt,uint256 finishedAt,uint256 lastMoveAt,uint32 multiplier))",
+  "function getOpenBattles(uint256 offset, uint256 limit) external view returns (tuple(uint256,address,address,uint256,uint256,int16,int16,uint8,uint8,uint8,bool,uint8,uint8,uint8,uint8,address,uint256,uint256,uint256,uint32)[])",
   "function cancelBattle(uint256 battleId) external",
-  "function createBattle(uint256 cardId) external returns (uint256)",
+  "function createBattle(uint256 cardId, uint32 multiplier) external returns (uint256)",
   "function joinBattle(uint256 battleId, uint256 cardId) external",
   "function entryFee() view returns (uint256)",
   "function activeBattle(address) view returns (uint256)",
@@ -58,12 +58,32 @@ const BATTLE_ABI = [
   "function seasonClaimDeadline(uint256 season) view returns (uint256)",
   "function claimTimeRemaining(uint256 season) view returns (uint256)",
   "function seasonTotalRewarded(uint256 season) view returns (uint256)",
-  "function getPoolInfo() view returns (uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
+  "function getPoolInfo() view returns (uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
   "function prizePool() view returns (uint256)",
   "function seasonTimeRemaining() view returns (uint256)",
+  "function multiplierFeePerUnit() view returns (uint256)",
+  "function platformFeeBps() view returns (uint256)",
+  "function owner() view returns (address)",
+  "function endSeason(address[] calldata rankedPlayers) external",
+  "function sweepUnclaimedPrizes(uint256 season) external",
+  "function setPrizeStructure(uint256[] calldata _topTierShares, uint256 _totalRewardedPlayers) external",
+  "function setEntryFee(uint256 _fee) external",
+  "function setSeasonDuration(uint256 _duration) external",
+  "function setClaimWindow(uint256 _window) external",
+  "function setPlatformFee(uint256 _feeBps) external",
+  "function setMultiplierFee(uint256 _feePerUnit) external",
+  "function withdrawPlatformFees(address to) external",
+  "function clearPrizePool(address to) external",
+  "function platformFees() view returns (uint256)",
+  "function seasonStart() view returns (uint256)",
+  "function seasonDuration() view returns (uint256)",
+  "function claimWindow() view returns (uint256)",
+  "function totalRewardedPlayers() view returns (uint256)",
+  "function getTopTierShares() view returns (uint256[])",
   "event PlayerRanked(uint256 indexed season, uint256 indexed rank, address indexed player)",
   "event PrizeClaimed(uint256 indexed season, uint256 rank, address indexed player, uint256 amount)",
   "event BattleDraw(uint256 indexed battleId, address indexed player1, address indexed player2, uint256 refundEach)",
+  "event BattleFinished(uint256 indexed battleId, address indexed winner, uint8 totalTurns)",
 ];
 const MARKETPLACE_ABI = [
   "function listCard(uint256 cardId, uint256 price) external returns (uint256)",
@@ -455,7 +475,7 @@ export default function WhalemonTCG() {
   const [balance,setBalance]       = useState("0.00");
   const [page,setPage] = useState(()=>{
     const hash = window.location.hash.replace("#","");
-    return ["whales","cards","battle","market","leaderboard"].includes(hash) ? hash : "whales";
+    return ["whales","cards","battle","market","leaderboard","admin"].includes(hash) ? hash : "whales";
   });
 
   const navigate = (p) => { setPage(p); window.location.hash = p; setPicked(null); };
@@ -463,7 +483,7 @@ export default function WhalemonTCG() {
   useEffect(()=>{
     const onHash = () => {
       const hash = window.location.hash.replace("#","");
-      if(["whales","cards","battle","market","leaderboard"].includes(hash)) setPage(hash);
+      if(["whales","cards","battle","market","leaderboard","admin"].includes(hash)) setPage(hash);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -495,6 +515,13 @@ export default function WhalemonTCG() {
   const [bCd,setBCd]               = useState(0);
   const [bResult,setBResult]       = useState(null);
 const [resumeBattle, setResumeBattle] = useState(null);
+const [battleMultiplier, setBattleMultiplier] = useState(1);
+const [multiplierFeeUnit, setMultiplierFeeUnit] = useState(100000); // 0.1 PATHUSD in 6 decimals
+const [contractOwner, setContractOwner] = useState(null);
+const [isOwner, setIsOwner] = useState(false);
+const [adminTab, setAdminTab] = useState("season");
+const [adminLoading, setAdminLoading] = useState(false);
+const [adminInfo, setAdminInfo] = useState(null);
 
 // marketplace
 const [listings, setListings]           = useState([]);
@@ -541,6 +568,7 @@ const pvpPollRef                         = useRef(null);
     if(connected && addr && provider){ loadBalance(); loadWhales(); loadCards(); }
     if(page==="market") loadMarketplace();
     if(page==="leaderboard"){ loadLeaderboard(); if(connected && addr) loadClaims(); }
+    if(page==="admin" && isOwner) loadAdminInfo();
   },[connected,addr]);
 
   // ── Wallet switch handling: reload data when address changes mid-session ──
@@ -896,6 +924,31 @@ const loadMarketplace = async () => {
     setClaimLoading(false);
   };
 
+  const loadAdminInfo = async () => {
+    try {
+      const prov = await ensureTempo();
+      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+      const [poolInfo, timeLeft, fees] = await Promise.all([
+        arena.getPoolInfo().catch(()=>null),
+        arena.seasonTimeRemaining().catch(()=>0n),
+        arena.platformFees().catch(()=>0n),
+      ]);
+      if(poolInfo) {
+        const pool = (Number(poolInfo[0]) / 1e6).toFixed(2);
+        const season = Number(poolInfo[1]);
+        const totalBattles = Number(poolInfo[3]);
+        const timeLeftSecs = Number(timeLeft);
+        const daysLeft = Math.ceil(timeLeftSecs / 86400);
+        const timeLeftStr = timeLeftSecs > 0 ? `${daysLeft}d left` : "Ended";
+        setAdminInfo({
+          season, pool, totalBattles,
+          fees: (Number(fees) / 1e6).toFixed(2),
+          timeLeft: timeLeftStr,
+        });
+      }
+    } catch(e) { console.error("loadAdminInfo", e); }
+  };
+
   const handleClaimPrize = async (season, rank) => {
     setLbClaiming(`${season}-${rank}`);
     try {
@@ -1175,6 +1228,18 @@ const loadCards = async () => {
       sessionStorage.setItem("whalemon_connected","1");
       sessionStorage.removeItem("whalemon_explore");
       toast("Connected to Tempo ✓");
+      // Check if connected wallet is contract owner
+      try {
+        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+        const ownerAddr = await arena.owner();
+        setContractOwner(ownerAddr.toLowerCase());
+        setIsOwner(acc.toLowerCase() === ownerAddr.toLowerCase());
+        // Load multiplier fee
+        try {
+          const mfu = await arena.multiplierFeePerUnit();
+          setMultiplierFeeUnit(Number(mfu));
+        } catch(_){}
+      } catch(e){ console.log("owner check", e); }
       // Check for active battle
       try {
         const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
@@ -1258,29 +1323,32 @@ const loadCards = async () => {
         const pathusd = new Contract(CONTRACTS.PATHUSD, PATHUSD_ABI, signer);
         const arena   = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
         const fee     = await arena.entryFee();
-        if(fee > 0n){
+        const mult    = battleMultiplier;
+        const mfee    = mult > 1 ? BigInt(mult - 1) * BigInt(multiplierFeeUnit) : 0n;
+        const totalCost = fee * BigInt(mult) + mfee;
+        if(totalCost > 0n){
           const allowance = await pathusd.allowance(addr, CONTRACTS.BATTLE_ARENA);
-          const decimals  = await pathusd.decimals();
-          const approveAmount = 10n * (10n ** BigInt(Number(decimals)));
-          if(allowance < fee){
+          if(allowance < totalCost){
             toast("Approving PATHUSD…","info");
-            const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, approveAmount);
+            const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, totalCost * 2n);
             await approveTx.wait();
           }
         }
         // Check for open battles to join
         const openBattles = await arena.getOpenBattles(0, 10);
         let bid;
-        if(openBattles.length > 0){
-          // Join the first open battle
+        // Find an open battle with matching multiplier
+        const matchingBattle = openBattles.find(b => Number(b[19] || b.multiplier || 1) === mult);
+        if(matchingBattle){
+          // Join the matching open battle
           toast("Opponent found! Joining battle…","info");
-          const tx = await arena.joinBattle(Number(openBattles[0].battleId), c.id);
+          const tx = await arena.joinBattle(Number(matchingBattle.battleId || matchingBattle[0]), c.id);
           await tx.wait();
-          bid = Number(openBattles[0].battleId);
+          bid = Number(matchingBattle.battleId || matchingBattle[0]);
         } else {
           // Create a new battle and wait
-          toast("Creating battle — waiting for opponent…","info");
-          const tx = await arena.createBattle(c.id);
+          toast(`Creating ${mult}× battle — waiting for opponent…`,"info");
+          const tx = await arena.createBattle(c.id, mult);
           const receipt = await tx.wait();
           const event = receipt.logs.map(log=>{ try{ return arena.interface.parseLog(log); }catch(_){return null;} }).find(e=>e&&e.name==="BattleCreated");
           bid = event ? Number(event.args.battleId) : Number(await arena.activeBattle(addr));
@@ -1332,18 +1400,19 @@ const loadCards = async () => {
       const pathusd = new Contract(CONTRACTS.PATHUSD, PATHUSD_ABI, signer);
       const arena   = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
       const fee     = await arena.entryFee();
-      if(fee > 0n){
+      const mult    = battleMultiplier;
+      const mfee    = mult > 1 ? BigInt(mult - 1) * BigInt(multiplierFeeUnit) : 0n;
+      const totalCost = fee * BigInt(mult) + mfee;
+      if(totalCost > 0n){
         const allowance = await pathusd.allowance(addr, CONTRACTS.BATTLE_ARENA);
-        const decimals = await pathusd.decimals();
-        const approveAmount = 10n * (10n ** BigInt(decimals));
-        if(allowance < fee){
+        if(allowance < totalCost){
           toast("Approving PATHUSD…","info");
-          const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, approveAmount);
+          const approveTx = await pathusd.approve(CONTRACTS.BATTLE_ARENA, totalCost * 2n);
           await approveTx.wait();
         }
       }
-      toast("Creating battle on-chain…","info");
-      const tx = await arena.createAIBattle(c.id);
+      toast(`Creating ${mult}× AI battle on-chain…`,"info");
+      const tx = await arena.createAIBattle(c.id, mult);
       const receipt = await tx.wait();
       const event = receipt.logs.map(log=>{ try{ return arena.interface.parseLog(log); }catch(_){return null;} }).find(e=>e&&e.name==="BattleCreated");
       const bid = event ? event.args.battleId : await arena.activeBattle(addr);
@@ -1353,7 +1422,8 @@ const loadCards = async () => {
       const aiEl = Math.floor(Math.random()*6);
       setPCard({...c, hp:c.health});
       setOCard({id:"AI",element:aiEl,rarity:1,attack:50,defense:40,health:aiHp,speed:40,ability:"AI Strike",abilityDesc:"The AI attacks.",hp:aiHp});
-      setBIntro(true); setTimeout(()=>{ setBIntro(false); setBState("fight"); setBLog([{t:0,s:"Ranked AI battle started! 1 PATHUSD entry fee paid.",tp:"sys"}]); }, 3000);
+      const costDisplay = (Number(totalCost)/1e6).toFixed(2);
+      setBIntro(true); setTimeout(()=>{ setBIntro(false); setBState("fight"); setBLog([{t:0,s:`Ranked AI battle started! ${costDisplay} PATHUSD paid (${mult}× multiplier).`,tp:"sys"}]); }, 3000);
     } catch(e){
       console.error("createAIBattle",e);
       toast("Battle start failed: "+(e.reason||e.message||"Unknown"),"err");
@@ -1696,6 +1766,7 @@ const loadCards = async () => {
         <NavBtn label="Battle"      icon="⚔️" id="battle"/>
         <NavBtn label="Marketplace" icon="🏪" id="market"/>
         <NavBtn label="Leaderboard" icon="🏆" id="leaderboard"/>
+        {isOwner && <NavBtn label="Admin" icon="⚙️" id="admin"/>}
       </nav>
 
       {/* main */}
@@ -1887,11 +1958,45 @@ const loadCards = async () => {
               <div style={{textAlign:"center",paddingTop:40}}>
                 <div style={{fontSize:56,marginBottom:20}}>⚔️</div>
                 <h2 style={{fontSize:26,fontWeight:700,color:"#f1f5f9",marginBottom:10}}>Battle Arena</h2>
-                <p style={{fontSize:15,color:"#64748b",maxWidth:400,margin:"0 auto 32px"}}>Ranked matches cost 1 PATHUSD entry. Prize pool split each season.</p>
+                <p style={{fontSize:15,color:"#64748b",maxWidth:400,margin:"0 auto 24px"}}>Ranked matches start at 1 PATHUSD. Use a multiplier to boost your stakes and win credits.</p>
+
+                {/* Multiplier selector */}
+                <div style={{maxWidth:420,margin:"0 auto 28px",padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Battle Multiplier</div>
+                  <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:10}}>
+                    {[1,2,5,10,25,50].map(m=>(
+                      <button key={m} onClick={()=>setBattleMultiplier(m)} style={{
+                        padding:"8px 14px",borderRadius:8,fontSize:13,fontWeight:battleMultiplier===m?700:500,cursor:"pointer",fontFamily:F,
+                        background:battleMultiplier===m?"rgba(14,165,233,.15)":"rgba(255,255,255,.03)",
+                        border:`1px solid ${battleMultiplier===m?"rgba(14,165,233,.4)":"#1e293b"}`,
+                        color:battleMultiplier===m?"#38bdf8":"#64748b",
+                        transition:"all .15s"
+                      }}>{m}×</button>
+                    ))}
+                  </div>
+                  {(() => {
+                    const fee = 1; // 1 PATHUSD base
+                    const mult = battleMultiplier;
+                    const mfee = mult > 1 ? (mult - 1) * (multiplierFeeUnit / 1e6) : 0;
+                    const entry = fee * mult;
+                    const total = entry + mfee;
+                    const platformCut = entry * 0.05;
+                    const toPool = entry - platformCut;
+                    return (
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#475569",padding:"0 4px"}}>
+                        <span>Entry: <span style={{color:"#f1f5f9",fontWeight:600}}>{entry.toFixed(2)}</span></span>
+                        {mult > 1 && <span>Fee: <span style={{color:"#f59e0b",fontWeight:600}}>{mfee.toFixed(2)}</span></span>}
+                        <span>Total: <span style={{color:"#4ade80",fontWeight:700}}>${total.toFixed(2)}</span></span>
+                        <span>Win: <span style={{color:"#38bdf8",fontWeight:600}}>{mult} credits</span></span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
                 <div style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
                   {[{m:"free",ic:"🎯",t:"Practice",d:"vs AI · Free",c:"#22c55e"},
-                    {m:"ranked-ai",ic:"🤖",t:"Ranked AI",d:"vs AI · 1 PATHUSD",c:"#0ea5e9"},
-                    {m:"pvp",ic:"👥",t:"Ranked PvP",d:"vs Player · 1 PATHUSD",c:"#8b5cf6"},
+                    {m:"ranked-ai",ic:"🤖",t:"Ranked AI",d:`vs AI · ${battleMultiplier}× stakes`,c:"#0ea5e9"},
+                    {m:"pvp",ic:"👥",t:"Ranked PvP",d:`vs Player · ${battleMultiplier}× stakes`,c:"#8b5cf6"},
                     {m:"guide",ic:"📖",t:"Battle Guide",d:"Strategy & Tips",c:"#f59e0b"}].map(x=>(
                     <button key={x.m} onClick={()=>x.m==="guide"?setBState("guide"):startBattle(x.m)} style={{width:160,padding:"22px 16px",borderRadius:14,background:"#0a0e1f",border:`1px solid ${x.c}25`,cursor:"pointer",textAlign:"center",transition:"all .2s",fontFamily:F}}
                       onMouseEnter={o=>{o.currentTarget.style.borderColor=x.c;o.currentTarget.style.transform="translateY(-3px)";}}
@@ -2485,6 +2590,296 @@ const loadCards = async () => {
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── ADMIN DASHBOARD (owner only) ── */}
+        {page==="admin" && isOwner && (
+          <div className="page">
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+              <div style={{fontSize:22}}>⚙️</div>
+              <div>
+                <div style={{fontSize:18,fontWeight:800,color:"#f1f5f9"}}>Admin Dashboard</div>
+                <div style={{fontSize:13,color:"#64748b"}}>Contract Owner Controls</div>
+              </div>
+            </div>
+
+            {/* Admin Tabs */}
+            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12,flexWrap:"wrap"}}>
+              {[["season","🏆 Season"],["settings","⚙️ Settings"],["revenue","💰 Revenue"],["emergency","🚨 Emergency"]].map(([id,label])=>(
+                <button key={id} onClick={()=>{ setAdminTab(id); if(id==="season"||id==="revenue") loadAdminInfo(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:adminTab===id?"rgba(14,165,233,.12)":"transparent",color:adminTab===id?"#38bdf8":"#64748b",fontSize:13,fontWeight:adminTab===id?700:500,cursor:"pointer",fontFamily:F}}>{label}</button>
+              ))}
+            </div>
+
+            {/* Season Tab */}
+            {adminTab==="season" && (
+              <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                {/* Current season info */}
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>Current Season Status</div>
+                  <button onClick={loadAdminInfo} style={{padding:"8px 16px",borderRadius:8,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:F,marginBottom:12}}>↻ Refresh</button>
+                  {adminInfo && (
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                      {[
+                        ["Season",adminInfo.season,"#38bdf8"],
+                        ["Pool",`$${adminInfo.pool}`,"#4ade80"],
+                        ["Platform Fees",`$${adminInfo.fees}`,"#f59e0b"],
+                        ["Total Battles",adminInfo.totalBattles,"#a78bfa"],
+                        ["Time Left",adminInfo.timeLeft,"#64748b"],
+                      ].map(([l,v,c])=>(
+                        <div key={l} style={{padding:"10px 14px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",minWidth:90}}>
+                          <div style={{fontSize:10,color:"#475569",marginBottom:2}}>{l}</div>
+                          <div style={{fontSize:14,fontWeight:700,color:c,fontFamily:FM}}>{v}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* End Season */}
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(245,158,11,.2)"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f59e0b",marginBottom:6}}>End Season</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.6}}>
+                    This scans the chain for all battle results, builds the leaderboard sorted by score (PvP wins × 3 + AI wins × 1), and calls endSeason on the contract. Players can then claim their prizes.
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <label style={{fontSize:12,color:"#475569",display:"block",marginBottom:4}}>Players to reward (max 500)</label>
+                    <input id="admin-reward-count" type="number" defaultValue="25" min="1" max="500" style={{width:100,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                  </div>
+                  <button onClick={async()=>{
+                    setAdminLoading(true);
+                    try {
+                      const prov = await ensureTempo();
+                      const signer = await prov.getSigner();
+                      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                      const rewardCount = parseInt(document.getElementById("admin-reward-count").value) || 25;
+                      // Build leaderboard from events
+                      toast("Scanning chain for battle results…","info");
+                      const block = await prov.getBlockNumber();
+                      const from = Math.max(0, block - 200000);
+                      const events = await arena.queryFilter(arena.filters.BattleFinished(), from).catch(()=>[]);
+                      const currentS = Number(await arena.currentSeason());
+                      const stats = {};
+                      const ensure = (a) => { if(!stats[a]) stats[a] = {pvpWins:0,aiWins:0,addr:a}; };
+                      for(const ev of events) {
+                        try {
+                          const b = await arena.getBattle(ev.args.battleId);
+                          const p1 = b.player1.toLowerCase();
+                          const p2 = b.player2.toLowerCase();
+                          const winner = b.winner.toLowerCase();
+                          const zero = "0x0000000000000000000000000000000000000000";
+                          const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
+                          if(winner===zero) continue;
+                          const mult = Number(b.multiplier || 1);
+                          if(p2===arenaAddr) { ensure(p1); if(winner===p1) stats[p1].aiWins += mult; continue; }
+                          ensure(p1); ensure(p2);
+                          if(winner===p1) stats[p1].pvpWins += mult;
+                          else stats[p2].pvpWins += mult;
+                        } catch(_){}
+                      }
+                      // Also try on-chain season wins
+                      for(const a of Object.keys(stats)) {
+                        try {
+                          const pvp = Number(await arena.seasonPvPWins(currentS, a));
+                          const ai = Number(await arena.seasonAIWins(currentS, a));
+                          if(pvp > 0 || ai > 0) { stats[a].pvpWins = pvp; stats[a].aiWins = ai; }
+                        } catch(_){}
+                      }
+                      const ranked = Object.values(stats)
+                        .map(s=>({...s, score: s.pvpWins*3 + s.aiWins*1}))
+                        .filter(s=>s.score>0)
+                        .sort((a,b)=>b.score-a.score||b.pvpWins-a.pvpWins)
+                        .slice(0, rewardCount);
+                      if(ranked.length===0) { toast("No eligible players found","err"); setAdminLoading(false); return; }
+                      const addresses = ranked.map(r=>r.addr);
+                      toast(`Found ${ranked.length} players. Calling endSeason…`,"info");
+                      const tx = await arena.endSeason(addresses);
+                      await tx.wait();
+                      toast(`Season ${currentS} ended! ${ranked.length} players ranked. Players can now claim.`);
+                      loadAdminInfo();
+                    } catch(e) { toast("endSeason failed: "+(e.reason||e.message||"Unknown"),"err"); console.error(e); }
+                    setAdminLoading(false);
+                  }} disabled={adminLoading} style={{padding:"10px 20px",borderRadius:10,background:adminLoading?"#1e293b":"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",color:adminLoading?"#475569":"#000",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                    {adminLoading ? "Processing…" : "Scan & End Season"}
+                  </button>
+                </div>
+
+                {/* Set Prize Structure */}
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:6}}>Prize Structure</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.6}}>
+                    Set top-tier individual shares (basis points, e.g. 3000 = 30%) and total rewarded players. Equal-share tier splits the remainder. Snapshotted when endSeason is called.
+                  </div>
+                  <div style={{marginBottom:8}}>
+                    <label style={{fontSize:12,color:"#475569",display:"block",marginBottom:4}}>Top tier shares (comma-separated basis points, e.g. 3000,2000,1500,1000,700)</label>
+                    <input id="admin-shares" defaultValue="3000,2000,1500,1000,700" style={{width:"100%",padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <label style={{fontSize:12,color:"#475569",display:"block",marginBottom:4}}>Total rewarded players (top tier + equal-share tier)</label>
+                    <input id="admin-total-rewarded" type="number" defaultValue="25" min="1" max="500" style={{width:100,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                  </div>
+                  <button onClick={async()=>{
+                    setAdminLoading(true);
+                    try {
+                      const prov = await ensureTempo();
+                      const signer = await prov.getSigner();
+                      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                      const sharesStr = document.getElementById("admin-shares").value;
+                      const shares = sharesStr.split(",").map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+                      const totalRewarded = parseInt(document.getElementById("admin-total-rewarded").value) || 25;
+                      const tx = await arena.setPrizeStructure(shares, totalRewarded);
+                      await tx.wait();
+                      toast("Prize structure updated ✓");
+                    } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                    setAdminLoading(false);
+                  }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                    {adminLoading ? "Saving…" : "Update Prize Structure"}
+                  </button>
+                </div>
+
+                {/* Sweep Unclaimed */}
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:6}}>Sweep Unclaimed Prizes</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.6}}>
+                    After the 90-day claim window closes, sweep unclaimed prizes into the current season's pool. Can only be called once per season.
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <label style={{fontSize:12,color:"#475569",display:"block",marginBottom:4}}>Season number to sweep</label>
+                    <input id="admin-sweep-season" type="number" defaultValue="1" min="1" style={{width:80,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                  </div>
+                  <button onClick={async()=>{
+                    setAdminLoading(true);
+                    try {
+                      const prov = await ensureTempo();
+                      const signer = await prov.getSigner();
+                      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                      const season = parseInt(document.getElementById("admin-sweep-season").value);
+                      const tx = await arena.sweepUnclaimedPrizes(season);
+                      await tx.wait();
+                      toast(`Season ${season} unclaimed prizes swept ✓`);
+                      loadAdminInfo();
+                    } catch(e) { toast("Sweep failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                    setAdminLoading(false);
+                  }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(255,255,255,.06)",border:"1px solid #1e293b",color:"#94a3b8",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                    {adminLoading ? "Sweeping…" : "Sweep Unclaimed"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Settings Tab */}
+            {adminTab==="settings" && (
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {[
+                  {id:"admin-entry-fee",label:"Entry Fee (6 decimals, 1000000 = 1 PATHUSD)",def:"1000000",fn:"setEntryFee",parse:v=>parseInt(v)},
+                  {id:"admin-platform-fee",label:"Platform Fee (basis points, 500 = 5%, max 2000)",def:"500",fn:"setPlatformFee",parse:v=>parseInt(v)},
+                  {id:"admin-multiplier-fee",label:"Multiplier Fee Per Unit (6 decimals, 100000 = 0.1 PATHUSD)",def:"100000",fn:"setMultiplierFee",parse:v=>parseInt(v)},
+                  {id:"admin-season-duration",label:"Season Duration (seconds, 2592000 = 30 days)",def:"2592000",fn:"setSeasonDuration",parse:v=>parseInt(v)},
+                  {id:"admin-claim-window",label:"Claim Window (seconds, 7776000 = 90 days)",def:"7776000",fn:"setClaimWindow",parse:v=>parseInt(v)},
+                  {id:"admin-inactivity",label:"Inactivity Timeout (seconds, 1800 = 30 min)",def:"1800",fn:"setInactivityTimeout",parse:v=>parseInt(v)},
+                ].map(s=>(
+                  <div key={s.id} style={{padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                    <label style={{fontSize:12,color:"#64748b",display:"block",marginBottom:6}}>{s.label}</label>
+                    <div style={{display:"flex",gap:8}}>
+                      <input id={s.id} defaultValue={s.def} style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                      <button onClick={async()=>{
+                        setAdminLoading(true);
+                        try {
+                          const prov = await ensureTempo();
+                          const signer = await prov.getSigner();
+                          const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                          const val = s.parse(document.getElementById(s.id).value);
+                          const tx = await arena[s.fn](val);
+                          await tx.wait();
+                          toast(`${s.label.split("(")[0].trim()} updated ✓`);
+                        } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                        setAdminLoading(false);
+                      }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>
+                        {adminLoading ? "…" : "Update"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Revenue Tab */}
+            {adminTab==="revenue" && (
+              <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:8}}>Platform Revenue</div>
+                  <button onClick={loadAdminInfo} style={{padding:"6px 12px",borderRadius:6,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:F,marginBottom:12}}>↻ Refresh</button>
+                  {adminInfo && (
+                    <div style={{display:"flex",gap:12}}>
+                      <div style={{flex:1,padding:"14px",borderRadius:10,background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.15)",textAlign:"center"}}>
+                        <div style={{fontSize:10,color:"#475569",marginBottom:4}}>Accumulated Fees</div>
+                        <div style={{fontSize:22,fontWeight:800,color:"#f59e0b",fontFamily:FM}}>${adminInfo.fees}</div>
+                      </div>
+                      <div style={{flex:1,padding:"14px",borderRadius:10,background:"rgba(74,222,128,.06)",border:"1px solid rgba(74,222,128,.15)",textAlign:"center"}}>
+                        <div style={{fontSize:10,color:"#475569",marginBottom:4}}>Prize Pool</div>
+                        <div style={{fontSize:22,fontWeight:800,color:"#4ade80",fontFamily:FM}}>${adminInfo.pool}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:6}}>Withdraw Platform Fees</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>Transfer accumulated platform fees (entry fee cuts + multiplier fees) to a wallet address.</div>
+                  <div style={{marginBottom:10}}>
+                    <input id="admin-withdraw-addr" placeholder="0x… destination wallet" defaultValue={addr} style={{width:"100%",padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
+                  </div>
+                  <button onClick={async()=>{
+                    setAdminLoading(true);
+                    try {
+                      const prov = await ensureTempo();
+                      const signer = await prov.getSigner();
+                      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                      const to = document.getElementById("admin-withdraw-addr").value;
+                      const tx = await arena.withdrawPlatformFees(to);
+                      await tx.wait();
+                      toast("Platform fees withdrawn ✓");
+                      loadAdminInfo();
+                    } catch(e) { toast("Withdraw failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                    setAdminLoading(false);
+                  }} disabled={adminLoading} style={{padding:"10px 20px",borderRadius:10,background:adminLoading?"#1e293b":"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",color:adminLoading?"#475569":"#000",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                    {adminLoading ? "Processing…" : "Withdraw Fees"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Emergency Tab */}
+            {adminTab==="emergency" && (
+              <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                <div style={{padding:"16px",borderRadius:12,background:"rgba(239,68,68,.04)",border:"1px solid rgba(239,68,68,.2)"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f87171",marginBottom:6}}>Clear Prize Pool</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.6}}>
+                    <strong style={{color:"#f87171"}}>Emergency only.</strong> Transfers the entire prize pool to the specified address. Fully auditable on-chain via PrizePoolCleared event. Use only for contract migration or critical bugs.
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <input id="admin-clear-addr" placeholder="0x… destination wallet" defaultValue={addr} style={{width:"100%",padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid rgba(239,68,68,.3)",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
+                  </div>
+                  <button onClick={async()=>{
+                    if(!window.confirm("Are you sure? This empties the ENTIRE prize pool. This action cannot be undone.")) return;
+                    setAdminLoading(true);
+                    try {
+                      const prov = await ensureTempo();
+                      const signer = await prov.getSigner();
+                      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                      const to = document.getElementById("admin-clear-addr").value;
+                      const tx = await arena.clearPrizePool(to);
+                      await tx.wait();
+                      toast("Prize pool cleared ✓");
+                      loadAdminInfo();
+                    } catch(e) { toast("Clear failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                    setAdminLoading(false);
+                  }} disabled={adminLoading} style={{padding:"10px 20px",borderRadius:10,background:adminLoading?"#1e293b":"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.3)",color:"#f87171",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                    {adminLoading ? "Processing…" : "Clear Prize Pool"}
+                  </button>
+                </div>
               </div>
             )}
           </div>
