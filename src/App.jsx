@@ -621,32 +621,29 @@ const loadWhales = async () => {
         console.log("[whales] balance",bal);
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
 
-        // Scan ownerOf in small sequential batches — stops as soon as all tokens found
-        console.log("[whales] scanning ownerOf in batches...");
+        // Scan ownerOf sequentially one-by-one — rate limit safe, stops early once all found
+        console.log("[whales] scanning ownerOf...");
         const TOTAL = 3334;
-        const BATCH = 5;
         const found = new Set();
-        for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
-          const checks = [];
-          for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
-          const results = await Promise.all(checks.map(j =>
-            whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
-          ));
-          results.forEach(r => { if(r!==null) found.add(r); });
-          await new Promise(r=>setTimeout(r,80));
+        for(let j=0; j<TOTAL && found.size<bal; j++){
+          const o = await whel.ownerOf(j).catch(()=>null);
+          if(o && o.toLowerCase()===addr.toLowerCase()) found.add(j);
+          await new Promise(r=>setTimeout(r,150));
         }
         const ids = [...found];
         console.log("[whales] owned token IDs:", ids);
 
-        // Fetch tokenURI + isCardMinted in parallel for all IDs
-        const [uriResults, mintedResults] = await Promise.all([
-          Promise.all(ids.map(id =>
-            whel.tokenURI(id).catch(()=>null)
-          )),
-          Promise.all(ids.map(id =>
-            wCards.isCardMinted(id).catch(()=>false)
-          )),
-        ]);
+        // Fetch tokenURI + isCardMinted sequentially to avoid rate limits
+        const uriResults = [];
+        for(const id of ids){
+          uriResults.push(await whel.tokenURI(id).catch(()=>null));
+          await new Promise(r=>setTimeout(r,150));
+        }
+        const mintedResults = [];
+        for(const id of ids){
+          mintedResults.push(await wCards.isCardMinted(id).catch(()=>false));
+          await new Promise(r=>setTimeout(r,150));
+        }
 
         const list=[], minted=new Set();
         for(let i=0; i<ids.length; i++){
@@ -806,12 +803,14 @@ const loadMarketplace = async () => {
       const events = await arena.queryFilter(arena.filters.BattleFinished(), from).catch(()=>[]);
       const stats = {};
       const ensure = (a) => { if(!stats[a]) stats[a] = {wins:0,losses:0,pvpWins:0,aiWins:0,addr:a}; };
+      // Fetch battles sequentially to avoid rate limiting
       const battleIds = [...new Set(events.map(ev => Number(ev.args.battleId)))];
-      const battleFetches = await Promise.all(
-        battleIds.map(bid => arena.getBattle(bid).catch(()=>null))
-      );
       const battleMap = {};
-      battleIds.forEach((bid, i) => { if(battleFetches[i]) battleMap[bid] = battleFetches[i]; });
+      for(let i=0; i<battleIds.length; i++){
+        const b = await arena.getBattle(battleIds[i]).catch(()=>null);
+        if(b) battleMap[battleIds[i]] = b;
+        await new Promise(r=>setTimeout(r,150));
+      }
       for(const ev of events) {
         const bid    = Number(ev.args.battleId);
         const b      = battleMap[bid];
@@ -1192,22 +1191,29 @@ const loadCards = async () => {
       console.log("[cards] balance",bal);
       if(bal===0){ setCards([]); setLoadingC(false); return; }
 
-      // Scan ownerOf in small sequential batches — stops as soon as all cards found
-      console.log("[cards] scanning ownerOf in batches...");
+      // Scan ownerOf sequentially one-by-one — rate limit safe, stops early once all found
+      console.log("[cards] scanning ownerOf...");
       const TOTAL = 3334;
-      const BATCH = 5;
       const found = new Set();
-      for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
-        const checks = [];
-        for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
-        const results = await Promise.all(checks.map(j =>
-          wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
-        ));
-        results.forEach(r => { if(r!==null) found.add(r); });
-        await new Promise(r=>setTimeout(r,80));
+      for(let j=0; j<TOTAL && found.size<bal; j++){
+        const o = await wCards.ownerOf(j).catch(()=>null);
+        if(o && o.toLowerCase()===addr.toLowerCase()) found.add(j);
+        await new Promise(r=>setTimeout(r,150));
       }
       const ids = [...found];
       console.log("[cards] owned card IDs:", ids);
+
+      // Fetch tokenURIs and stats sequentially to avoid rate limits
+      const uriResults = [];
+      for(const id of ids){
+        uriResults.push(await whel.tokenURI(id).catch(()=>null));
+        await new Promise(r=>setTimeout(r,150));
+      }
+      const statsResults = [];
+      for(const id of ids){
+        statsResults.push(await wCards.getCardStats(id).catch(()=>null));
+        await new Promise(r=>setTimeout(r,150));
+      }
 
       // Fetch all tokenURIs and card stats in parallel
       const [uriResults, statsResults] = await Promise.all([
@@ -2691,9 +2697,12 @@ const loadCards = async () => {
                       const stats = {};
                       const ensure = (a) => { if(!stats[a]) stats[a] = {pvpWins:0,aiWins:0,addr:a}; };
                       const adminBids = [...new Set(events.map(ev => Number(ev.args.battleId)))];
-                      const adminBattles = await Promise.all(adminBids.map(bid => arena.getBattle(bid).catch(()=>null)));
                       const adminBattleMap = {};
-                      adminBids.forEach((bid, i) => { if(adminBattles[i]) adminBattleMap[bid] = adminBattles[i]; });
+                      for(let i=0; i<adminBids.length; i++){
+                        const b = await arena.getBattle(adminBids[i]).catch(()=>null);
+                        if(b) adminBattleMap[adminBids[i]] = b;
+                        await new Promise(r=>setTimeout(r,150));
+                      }
                       for(const ev of events) {
                         const b = adminBattleMap[Number(ev.args.battleId)];
                         if(!b) continue;
