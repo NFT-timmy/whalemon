@@ -13,7 +13,6 @@ const WHEL_ABI = [
     "function balanceOf(address) view returns (uint256)",
     "function ownerOf(uint256) view returns (address)",
     "function tokenURI(uint256) view returns (string)",
-    "function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ];
 const WHALECARDS_ABI = [
@@ -22,7 +21,6 @@ const WHALECARDS_ABI = [
     "function getCardStats(uint256) view returns (uint16,uint16,uint16,uint16,uint8,uint8,bytes32,bool)",
     "function isCardMinted(uint256) view returns (bool)",
     "function mintCard(uint256) external",
-    "function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)",
     "event CardMinted(address indexed owner, uint256 indexed whaleId, uint256 indexed cardId)",
   ];
 const PATHUSD_ABI = [
@@ -622,65 +620,43 @@ const loadWhales = async () => {
         const bal    = Number(await whel.balanceOf(addr));
         console.log("[whales] balance",bal);
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
-
-        // Primary: tokenOfOwnerByIndex — direct lookup, no scanning needed
-        console.log("[whales] fetching token IDs via tokenOfOwnerByIndex...");
-        let ids = [];
-        try {
-          const fetches = [];
-          for(let i=0; i<bal; i++) fetches.push(i);
-          for(const i of fetches){
-            const id = await whel.tokenOfOwnerByIndex(addr, i);
-            ids.push(Number(id));
-            await new Promise(r=>setTimeout(r,200));
+        console.log("[whales] scanning ownerOf for token IDs 0-3333...");
+        const ids = [];
+        const batchSize = 5;
+        for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
+          const checks = [];
+          for(let j=start; j<Math.min(start+batchSize,3333); j++){
+            checks.push(
+              whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+            );
           }
-        } catch(e){
-          // Fallback: ownerOf scan if tokenOfOwnerByIndex not supported
-          console.log("[whales] tokenOfOwnerByIndex failed, falling back to ownerOf scan...");
-          ids = [];
-          const found = new Set();
-          for(let j=0; j<3334 && found.size<bal; j++){
-            try {
-              const o = await whel.ownerOf(j);
-              if(o && o.toLowerCase()===addr.toLowerCase()) found.add(j);
-            } catch(_){}
-            await new Promise(r=>setTimeout(r,300));
-          }
-          ids = [...found];
+          const results = await Promise.all(checks);
+          for(const r of results) if(r!==null) ids.push(r);
+          if(start % 100 === 0) console.log("[whales] scanned", Math.min(start+batchSize,3333), "/ 3333, found", ids.length, "of", bal);
+          if(ids.length>=bal) break;
+          await new Promise(r=>setTimeout(r,200));
         }
         console.log("[whales] owned token IDs:", ids);
-
-        // Fetch tokenURI + isCardMinted sequentially to avoid rate limits
-        const uriResults = [];
-        for(const id of ids){
-          uriResults.push(await whel.tokenURI(id).catch(()=>null));
-          await new Promise(r=>setTimeout(r,150));
-        }
-        const mintedResults = [];
-        for(const id of ids){
-          mintedResults.push(await wCards.isCardMinted(id).catch(()=>false));
-          await new Promise(r=>setTimeout(r,150));
-        }
-
         const list=[], minted=new Set();
-        for(let i=0; i<ids.length; i++){
-          const id  = ids[i];
-          const uri = uriResults[i];
-          let img   = nftImg(id);
+        for(const id of ids){
+          let img = nftImg(id);
           try {
-            if(uri && uri.startsWith("data:application/json")){
+            const uri = await whel.tokenURI(id);
+            if(uri.startsWith("data:application/json")){
               const json = uri.startsWith("data:application/json;base64,")
                 ? JSON.parse(atob(uri.split(",")[1]))
                 : JSON.parse(decodeURIComponent(uri.split(",")[1]));
               if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-            } else if(uri && (uri.startsWith("http")||uri.startsWith("ipfs://"))){
+            } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
               const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
               const resp = await fetch(fetchUrl);
               const json = await resp.json();
               if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
             }
           } catch(e){ console.warn("tokenURI failed for",id,e); }
-          if(mintedResults[i]) minted.add(id);
+          let minted_ = false;
+          try{ minted_ = await wCards.isCardMinted(id); }catch(_){}
+          if(minted_) minted.add(id);
           list.push({id, image:img});
         }
         setWhales(list); setMintedIds(minted);
@@ -745,17 +721,13 @@ const loadMarketplace = async () => {
         soldAt: Number(l.soldAt),
       })));
 
-      // Holder count — parallel batches of 50
+      // Holder count
       try {
         const total = Number(await wc.totalSupply());
-        const cap   = Math.min(total, 500);
         const owners = new Set();
-        const BATCH  = 50;
-        for(let start=0; start<cap; start+=BATCH){
-          const batch = [];
-          for(let i=start; i<Math.min(start+BATCH,cap); i++) batch.push(wc.ownerOf(i).catch(()=>null));
-          const res = await Promise.all(batch);
-          res.forEach(o => { if(o) owners.add(o.toLowerCase()); });
+        for(let i = 0; i < Math.min(total, 500); i++) {
+          const o = await wc.ownerOf(i).catch(()=>null);
+          if(o) owners.add(o.toLowerCase());
         }
         setHolderCount(owners.size);
       } catch(e) { console.log("holders", e); }
@@ -814,40 +786,34 @@ const loadMarketplace = async () => {
         const pct = timeLeftSecs > 0 ? Math.min(100, Math.max(0, (elapsed / defaultDuration) * 100)) : 100;
         setLbSeason({ pool: pool.toFixed(2), season, daysLeft, timeLeftSecs, pct });
       }
-      // Load battle events for rankings — batch-fetch battles in parallel, no serial awaits
+      // Load battle events for rankings
       const block = await prov.getBlockNumber();
       const from  = Math.max(0, block - 50000);
       const events = await arena.queryFilter(arena.filters.BattleFinished(), from).catch(()=>[]);
       const stats = {};
       const ensure = (a) => { if(!stats[a]) stats[a] = {wins:0,losses:0,pvpWins:0,aiWins:0,addr:a}; };
-      // Fetch battles sequentially to avoid rate limiting
-      const battleIds = [...new Set(events.map(ev => Number(ev.args.battleId)))];
-      const battleMap = {};
-      for(let i=0; i<battleIds.length; i++){
-        const b = await arena.getBattle(battleIds[i]).catch(()=>null);
-        if(b) battleMap[battleIds[i]] = b;
-        await new Promise(r=>setTimeout(r,150));
-      }
       for(const ev of events) {
-        const bid    = Number(ev.args.battleId);
-        const b      = battleMap[bid];
-        if(!b) continue;
-        const p1     = b.player1.toLowerCase();
-        const p2     = b.player2.toLowerCase();
-        const winner = b.winner.toLowerCase();
-        const zero   = "0x0000000000000000000000000000000000000000";
-        const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
-        if(winner===zero) continue; // draws — no wins
-        if(p2===arenaAddr) {
-          // AI battle
-          ensure(p1);
-          if(winner===p1){ stats[p1].wins++; stats[p1].aiWins++; }
-          else { stats[p1].losses++; }
-          continue;
-        }
-        ensure(p1); ensure(p2);
-        if(winner===p1){ stats[p1].wins++; stats[p1].pvpWins++; stats[p2].losses++; }
-        else           { stats[p2].wins++; stats[p2].pvpWins++; stats[p1].losses++; }
+        const bid = Number(ev.args.battleId);
+        try {
+          const b = await arena.getBattle(bid);
+          const p1 = b.player1.toLowerCase();
+          const p2 = b.player2.toLowerCase();
+          const winner = b.winner.toLowerCase();
+          const mode = Number(b.mode); // 0 = PvP, 1 = AI
+          const zero = "0x0000000000000000000000000000000000000000";
+          const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
+          if(winner===zero) continue; // draws — no wins
+          if(p2===arenaAddr) {
+            // AI battle
+            ensure(p1);
+            if(winner===p1){ stats[p1].wins++; stats[p1].aiWins++; }
+            else { stats[p1].losses++; }
+            continue;
+          }
+          ensure(p1); ensure(p2);
+          if(winner===p1){ stats[p1].wins++; stats[p1].pvpWins++; stats[p2].losses++; }
+          else           { stats[p2].wins++; stats[p2].pvpWins++; stats[p1].losses++; }
+        } catch(_){}
       }
       // Also try reading on-chain season PvP/AI wins for current season
       for(const a of Object.keys(stats)) {
@@ -1203,77 +1169,52 @@ const loadCards = async () => {
     try {
       const prov   = await ensureTempo();
       const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
-      const whel   = new Contract(CONTRACTS.WHEL_NFT,WHEL_ABI,prov);
-      const bal    = Number(await wCards.balanceOf(addr));
-      console.log("[cards] balance",bal);
-      if(bal===0){ setCards([]); setLoadingC(false); return; }
-
-      // Primary: tokenOfOwnerByIndex — direct lookup, no scanning needed
-      console.log("[cards] fetching card IDs via tokenOfOwnerByIndex...");
-      let ids = [];
-      try {
-        for(let i=0; i<bal; i++){
-          const id = await wCards.tokenOfOwnerByIndex(addr, i);
-          ids.push(Number(id));
+        const whel   = new Contract(CONTRACTS.WHEL_NFT,WHEL_ABI,prov);
+        const bal    = Number(await wCards.balanceOf(addr));
+        console.log("[cards] balance",bal);
+        if(bal===0){ setCards([]); setLoadingC(false); return; }
+        const ids = [];
+        const batchSize = 5;
+        for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
+          const checks = [];
+          for(let j=start; j<Math.min(start+batchSize,3333); j++){
+            checks.push(
+              wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+            );
+          }
+          const results = await Promise.all(checks);
+          for(const r of results) if(r!==null) ids.push(r);
+          if(ids.length>=bal) break;
           await new Promise(r=>setTimeout(r,200));
         }
-      } catch(e){
-        // Fallback: ownerOf scan if tokenOfOwnerByIndex not supported
-        console.log("[cards] tokenOfOwnerByIndex failed, falling back to ownerOf scan...");
-        ids = [];
-        const found = new Set();
-        for(let j=0; j<3334 && found.size<bal; j++){
+        console.log("[cards] owned card IDs:", ids);
+        const list=[];
+        for(const id of ids){
           try {
-            const o = await wCards.ownerOf(j);
-            if(o && o.toLowerCase()===addr.toLowerCase()) found.add(j);
-          } catch(_){}
-          await new Promise(r=>setTimeout(r,300));
+            let img = nftImg(id);
+            try {
+              const uri = await whel.tokenURI(id);
+              if(uri.startsWith("data:application/json")){
+                const json = uri.startsWith("data:application/json;base64,")
+                  ? JSON.parse(atob(uri.split(",")[1]))
+                  : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+              } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
+                const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
+                const resp = await fetch(fetchUrl);
+                const json = await resp.json();
+                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+              }
+            } catch(e){ console.warn("card tokenURI failed for",id,e); }
+            const raw  = await wCards.getCardStats(id);
+            const isSet = raw[7];
+            list.push({id,image:img,element:Number(raw[4]),rarity:Number(raw[5]),
+              attack:Number(raw[0]),defense:Number(raw[1]),health:Number(raw[2]),speed:Number(raw[3]),
+              ability:isSet?"Ocean Strike":"Awaiting stats...",abilityDesc:isSet?"A powerful ocean attack.":"Oracle is generating stats.",
+              statsReady:isSet});
+          } catch(e){ console.warn("card load",id,e); }
         }
-        ids = [...found];
-      }
-      console.log("[cards] owned card IDs:", ids);
-
-      // Fetch tokenURIs and stats sequentially to avoid rate limits
-      const uriResults = [];
-      for(const id of ids){
-        uriResults.push(await whel.tokenURI(id).catch(()=>null));
-        await new Promise(r=>setTimeout(r,150));
-      }
-      const statsResults = [];
-      for(const id of ids){
-        statsResults.push(await wCards.getCardStats(id).catch(()=>null));
-        await new Promise(r=>setTimeout(r,150));
-      }
-
-      // Fetch all tokenURIs and card stats in parallel
-
-      const list=[];
-      for(let i=0; i<ids.length; i++){
-        const id   = ids[i];
-        const uri  = uriResults[i];
-        const raw  = statsResults[i];
-        if(!raw) continue;
-        let img = nftImg(id);
-        try {
-          if(uri && uri.startsWith("data:application/json")){
-            const json = uri.startsWith("data:application/json;base64,")
-              ? JSON.parse(atob(uri.split(",")[1]))
-              : JSON.parse(decodeURIComponent(uri.split(",")[1]));
-            if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-          } else if(uri && (uri.startsWith("http")||uri.startsWith("ipfs://"))){
-            const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
-            const resp = await fetch(fetchUrl);
-            const json = await resp.json();
-            if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-          }
-        } catch(e){ console.warn("card tokenURI failed for",id,e); }
-        const isSet = raw[7];
-        list.push({id,image:img,element:Number(raw[4]),rarity:Number(raw[5]),
-          attack:Number(raw[0]),defense:Number(raw[1]),health:Number(raw[2]),speed:Number(raw[3]),
-          ability:isSet?"Ocean Strike":"Awaiting stats...",abilityDesc:isSet?"A powerful ocean attack.":"Oracle is generating stats.",
-          statsReady:isSet});
-      }
-      setCards(list);
+        setCards(list);
     } catch(e){ console.error("loadCards",e); }
     setLoadingC(false);
   };
@@ -2714,7 +2655,7 @@ const loadCards = async () => {
                       const signer = await prov.getSigner();
                       const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
                       const rewardCount = parseInt(document.getElementById("admin-reward-count").value) || 25;
-                      // Build leaderboard from events — parallel getBattle calls
+                      // Build leaderboard from events
                       toast("Scanning chain for battle results…","info");
                       const block = await prov.getBlockNumber();
                       const from = Math.max(0, block - 200000);
@@ -2722,27 +2663,21 @@ const loadCards = async () => {
                       const currentS = Number(await arena.currentSeason());
                       const stats = {};
                       const ensure = (a) => { if(!stats[a]) stats[a] = {pvpWins:0,aiWins:0,addr:a}; };
-                      const adminBids = [...new Set(events.map(ev => Number(ev.args.battleId)))];
-                      const adminBattleMap = {};
-                      for(let i=0; i<adminBids.length; i++){
-                        const b = await arena.getBattle(adminBids[i]).catch(()=>null);
-                        if(b) adminBattleMap[adminBids[i]] = b;
-                        await new Promise(r=>setTimeout(r,150));
-                      }
                       for(const ev of events) {
-                        const b = adminBattleMap[Number(ev.args.battleId)];
-                        if(!b) continue;
-                        const p1 = b.player1.toLowerCase();
-                        const p2 = b.player2.toLowerCase();
-                        const winner = b.winner.toLowerCase();
-                        const zero = "0x0000000000000000000000000000000000000000";
-                        const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
-                        if(winner===zero) continue;
-                        const mult = Number(b.multiplier || 1);
-                        if(p2===arenaAddr) { ensure(p1); if(winner===p1) stats[p1].aiWins += mult; continue; }
-                        ensure(p1); ensure(p2);
-                        if(winner===p1) stats[p1].pvpWins += mult;
-                        else stats[p2].pvpWins += mult;
+                        try {
+                          const b = await arena.getBattle(ev.args.battleId);
+                          const p1 = b.player1.toLowerCase();
+                          const p2 = b.player2.toLowerCase();
+                          const winner = b.winner.toLowerCase();
+                          const zero = "0x0000000000000000000000000000000000000000";
+                          const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
+                          if(winner===zero) continue;
+                          const mult = Number(b.multiplier || 1);
+                          if(p2===arenaAddr) { ensure(p1); if(winner===p1) stats[p1].aiWins += mult; continue; }
+                          ensure(p1); ensure(p2);
+                          if(winner===p1) stats[p1].pvpWins += mult;
+                          else stats[p2].pvpWins += mult;
+                        } catch(_){}
                       }
                       // Also try on-chain season wins
                       for(const a of Object.keys(stats)) {
