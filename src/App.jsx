@@ -621,26 +621,34 @@ const loadWhales = async () => {
         console.log("[whales] balance",bal);
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
 
-        // Use Transfer events to find owned token IDs instantly — one RPC call
-        console.log("[whales] scanning Transfer events...");
-        const block = await prov.getBlockNumber();
-        const from  = Math.max(0, block - 200000);
-        const received = await whel.queryFilter(whel.filters.Transfer(null, addr), from).catch(()=>[]);
-        const sent     = await whel.queryFilter(whel.filters.Transfer(addr, null), from).catch(()=>[]);
+        // Try Transfer events from block 0 first
+        console.log("[whales] scanning Transfer events from block 0...");
+        const received = await whel.queryFilter(whel.filters.Transfer(null, addr), 0).catch(()=>[]);
+        const sent     = await whel.queryFilter(whel.filters.Transfer(addr, null), 0).catch(()=>[]);
         const sentIds  = new Set(sent.map(e => Number(e.args.tokenId)));
         const idSet    = new Set();
         for(const e of received){
           const id = Number(e.args.tokenId);
           if(!sentIds.has(id)) idSet.add(id);
         }
-        // Fallback: if events don't cover full history, verify ownership
         let ids = [...idSet];
+        console.log("[whales] event scan found", ids.length, "of", bal);
+
+        // If event scan didn't find all — fall back to parallel ownerOf scan in batches
         if(ids.length < bal){
-          console.log("[whales] event scan found", ids.length, "of", bal, "— verifying ownership for found IDs and scanning remainder");
-          const verified = await Promise.all(ids.map(id =>
-            whel.ownerOf(id).then(o => o.toLowerCase()===addr.toLowerCase() ? id : null).catch(()=>null)
-          ));
-          ids = verified.filter(id => id !== null);
+          console.log("[whales] falling back to parallel ownerOf scan...");
+          const TOTAL = 3334;
+          const BATCH = 50;
+          const found = new Set(ids);
+          for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
+            const checks = [];
+            for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
+            const results = await Promise.all(checks.map(j =>
+              whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+            ));
+            results.forEach(r => { if(r!==null) found.add(r); });
+          }
+          ids = [...found];
         }
         console.log("[whales] owned token IDs:", ids);
 
@@ -1198,28 +1206,35 @@ const loadCards = async () => {
       console.log("[cards] balance",bal);
       if(bal===0){ setCards([]); setLoadingC(false); return; }
 
-      // Use CardMinted events to find owned card IDs instantly
-      console.log("[cards] scanning CardMinted events...");
-      const block    = await prov.getBlockNumber();
-      const from     = Math.max(0, block - 200000);
-      const minted   = await wCards.queryFilter(wCards.filters.CardMinted(addr), from).catch(()=>[]);
-      const transferred = await wCards.queryFilter(
-        wCards.filters.Transfer(null, addr), from
-      ).catch(()=>[]);
-      const sentOut  = await wCards.queryFilter(
-        wCards.filters.Transfer(addr, null), from
-      ).catch(()=>[]);
-      const sentIds  = new Set(sentOut.map(e => Number(e.args.tokenId)));
+      // Try CardMinted + Transfer events from block 0 first
+      console.log("[cards] scanning CardMinted events from block 0...");
+      const [mintedEvts, transferredEvts, sentOutEvts] = await Promise.all([
+        wCards.queryFilter(wCards.filters.CardMinted(addr), 0).catch(()=>[]),
+        wCards.queryFilter(wCards.filters.Transfer(null, addr), 0).catch(()=>[]),
+        wCards.queryFilter(wCards.filters.Transfer(addr, null), 0).catch(()=>[]),
+      ]);
+      const sentIds  = new Set(sentOutEvts.map(e => Number(e.args.tokenId)));
       const idSet    = new Set();
-      for(const e of minted)      idSet.add(Number(e.args.cardId));
-      for(const e of transferred) { const id = Number(e.args.tokenId); if(!sentIds.has(id)) idSet.add(id); }
+      for(const e of mintedEvts)      idSet.add(Number(e.args.cardId));
+      for(const e of transferredEvts) { const id = Number(e.args.tokenId); if(!sentIds.has(id)) idSet.add(id); }
       let ids = [...idSet];
-      // Verify if event scan is incomplete
+      console.log("[cards] event scan found", ids.length, "of", bal);
+
+      // If event scan didn't find all — fall back to parallel ownerOf scan in batches
       if(ids.length < bal){
-        const verified = await Promise.all(ids.map(id =>
-          wCards.ownerOf(id).then(o => o.toLowerCase()===addr.toLowerCase() ? id : null).catch(()=>null)
-        ));
-        ids = verified.filter(id => id !== null);
+        console.log("[cards] falling back to parallel ownerOf scan...");
+        const TOTAL = 3334;
+        const BATCH = 50;
+        const found = new Set(ids);
+        for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
+          const checks = [];
+          for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
+          const results = await Promise.all(checks.map(j =>
+            wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+          ));
+          results.forEach(r => { if(r!==null) found.add(r); });
+        }
+        ids = [...found];
       }
       console.log("[cards] owned card IDs:", ids);
 
