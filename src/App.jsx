@@ -621,35 +621,21 @@ const loadWhales = async () => {
         console.log("[whales] balance",bal);
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
 
-        // Try Transfer events from block 0 first
-        console.log("[whales] scanning Transfer events from block 0...");
-        const received = await whel.queryFilter(whel.filters.Transfer(null, addr), 0).catch(()=>[]);
-        const sent     = await whel.queryFilter(whel.filters.Transfer(addr, null), 0).catch(()=>[]);
-        const sentIds  = new Set(sent.map(e => Number(e.args.tokenId)));
-        const idSet    = new Set();
-        for(const e of received){
-          const id = Number(e.args.tokenId);
-          if(!sentIds.has(id)) idSet.add(id);
+        // Scan ownerOf in small sequential batches — stops as soon as all tokens found
+        console.log("[whales] scanning ownerOf in batches...");
+        const TOTAL = 3334;
+        const BATCH = 5;
+        const found = new Set();
+        for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
+          const checks = [];
+          for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
+          const results = await Promise.all(checks.map(j =>
+            whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+          ));
+          results.forEach(r => { if(r!==null) found.add(r); });
+          await new Promise(r=>setTimeout(r,80));
         }
-        let ids = [...idSet];
-        console.log("[whales] event scan found", ids.length, "of", bal);
-
-        // If event scan didn't find all — fall back to parallel ownerOf scan in batches
-        if(ids.length < bal){
-          console.log("[whales] falling back to parallel ownerOf scan...");
-          const TOTAL = 3334;
-          const BATCH = 50;
-          const found = new Set(ids);
-          for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
-            const checks = [];
-            for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
-            const results = await Promise.all(checks.map(j =>
-              whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
-            ));
-            results.forEach(r => { if(r!==null) found.add(r); });
-          }
-          ids = [...found];
-        }
+        const ids = [...found];
         console.log("[whales] owned token IDs:", ids);
 
         // Fetch tokenURI + isCardMinted in parallel for all IDs
@@ -1206,36 +1192,21 @@ const loadCards = async () => {
       console.log("[cards] balance",bal);
       if(bal===0){ setCards([]); setLoadingC(false); return; }
 
-      // Try CardMinted + Transfer events from block 0 first
-      console.log("[cards] scanning CardMinted events from block 0...");
-      const [mintedEvts, transferredEvts, sentOutEvts] = await Promise.all([
-        wCards.queryFilter(wCards.filters.CardMinted(addr), 0).catch(()=>[]),
-        wCards.queryFilter(wCards.filters.Transfer(null, addr), 0).catch(()=>[]),
-        wCards.queryFilter(wCards.filters.Transfer(addr, null), 0).catch(()=>[]),
-      ]);
-      const sentIds  = new Set(sentOutEvts.map(e => Number(e.args.tokenId)));
-      const idSet    = new Set();
-      for(const e of mintedEvts)      idSet.add(Number(e.args.cardId));
-      for(const e of transferredEvts) { const id = Number(e.args.tokenId); if(!sentIds.has(id)) idSet.add(id); }
-      let ids = [...idSet];
-      console.log("[cards] event scan found", ids.length, "of", bal);
-
-      // If event scan didn't find all — fall back to parallel ownerOf scan in batches
-      if(ids.length < bal){
-        console.log("[cards] falling back to parallel ownerOf scan...");
-        const TOTAL = 3334;
-        const BATCH = 50;
-        const found = new Set(ids);
-        for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
-          const checks = [];
-          for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
-          const results = await Promise.all(checks.map(j =>
-            wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
-          ));
-          results.forEach(r => { if(r!==null) found.add(r); });
-        }
-        ids = [...found];
+      // Scan ownerOf in small sequential batches — stops as soon as all cards found
+      console.log("[cards] scanning ownerOf in batches...");
+      const TOTAL = 3334;
+      const BATCH = 5;
+      const found = new Set();
+      for(let start=0; start<TOTAL && found.size<bal; start+=BATCH){
+        const checks = [];
+        for(let j=start; j<Math.min(start+BATCH,TOTAL); j++) checks.push(j);
+        const results = await Promise.all(checks.map(j =>
+          wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+        ));
+        results.forEach(r => { if(r!==null) found.add(r); });
+        await new Promise(r=>setTimeout(r,80));
       }
+      const ids = [...found];
       console.log("[cards] owned card IDs:", ids);
 
       // Fetch all tokenURIs and card stats in parallel
