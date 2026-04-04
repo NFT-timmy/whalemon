@@ -171,7 +171,7 @@ function Card({ card, size="md", onClick }) {
   const imgBg = useImgBg(card.image);
   return (
     <div style={{display:"inline-flex",flexDirection:"column",alignItems:"flex-end"}}>
-    <div id={`card-${card.id}`} onClick={onClick} className={lg?"wm-card-lg":"wm-card"} style={{
+    <div id={`card-${card.id}`} onClick={onClick} style={{
       width:lg?340:250, maxWidth:"100%", borderRadius:14, background:"#0a0e1f",
       border:`1.5px solid ${e.color}30`,
       boxShadow:`0 0 24px ${e.color}0d`,
@@ -1650,59 +1650,111 @@ const loadCards = async () => {
     .card-grid { display:flex; flex-wrap:wrap; gap:16px; justify-content:center; }
 
     /* ── Mobile Responsive ─────────────────────────────────────── */
-    /* Tablet */
     @media(max-width:768px){
-      .wm-header { padding:10px 14px !important; gap:8px !important; flex-wrap:wrap !important; }
-      .wm-header-left { gap:8px !important; }
-      .wm-header-logo { font-size:18px !important; letter-spacing:-0.5px !important; }
-      .wm-header-right { gap:6px !important; flex-wrap:wrap !important; justify-content:flex-end !important; }
-      .wm-header-bal { font-size:11px !important; padding:5px 8px !important; }
-      .wm-header-addr { font-size:10px !important; padding:4px 8px !important; max-width:100px !important; overflow:hidden !important; text-overflow:ellipsis !important; }
-      .wm-header-dc { font-size:11px !important; padding:5px 8px !important; }
-      .wm-nav { padding:6px 14px !important; gap:4px !important; overflow-x:auto !important; -webkit-overflow-scrolling:touch !important; scrollbar-width:none !important; }
+      /* Header: remove fixed height, allow wrapping */
+      .wm-header {
+        height:auto !important;
+        min-height:48px !important;
+        padding:8px 12px !important;
+        flex-wrap:wrap !important;
+        gap:8px !important;
+      }
+      .wm-header-logo { font-size:15px !important; }
+      .wm-header-right {
+        gap:6px !important;
+        flex-wrap:wrap !important;
+        justify-content:flex-end !important;
+      }
+      .wm-header-bal { font-size:11px !important; padding:4px 8px !important; }
+      .wm-header-addr {
+        font-size:10px !important;
+        padding:4px 8px !important;
+        max-width:100px !important;
+        overflow:hidden !important;
+        text-overflow:ellipsis !important;
+      }
+      .wm-header-dc { font-size:11px !important; padding:4px 8px !important; }
+      /* Nav: scrollable, icon-only labels */
+      .wm-nav {
+        padding:6px 12px !important;
+        gap:2px !important;
+        overflow-x:auto !important;
+        -webkit-overflow-scrolling:touch !important;
+        scrollbar-width:none !important;
+      }
       .wm-nav::-webkit-scrollbar { display:none !important; }
-      .wm-nav-btn { padding:7px 10px !important; font-size:12px !important; white-space:nowrap !important; flex-shrink:0 !important; }
+      .wm-nav-btn {
+        padding:7px 10px !important;
+        font-size:12px !important;
+        white-space:nowrap !important;
+        flex-shrink:0 !important;
+      }
       .wm-nav-btn .wm-nav-label { display:none !important; }
-      .wm-main { padding:16px 14px !important; }
-      .wm-footer { padding:12px 14px !important; font-size:11px !important; flex-wrap:wrap !important; gap:4px !important; justify-content:center !important; }
-      .card-grid { gap:10px !important; justify-content:center !important; }
+      /* Main & footer */
+      .wm-main { padding:16px 12px !important; }
+      .wm-footer {
+        padding:12px !important;
+        font-size:11px !important;
+        flex-wrap:wrap !important;
+        gap:4px !important;
+        justify-content:center !important;
+      }
+      /* Cards */
+      .card-grid { gap:10px !important; }
+      /* Battle modes: 2-col */
       .wm-battle-modes { flex-wrap:wrap !important; }
-      .wm-battle-mode-btn { min-width:120px !important; flex:1 1 calc(50% - 8px) !important; }
+      .wm-battle-mode-btn { min-width:120px !important; flex:1 1 calc(50% - 8px) !important; width:auto !important; }
+      /* Marketplace stats: 2-col */
       .wm-mkt-stats { flex-wrap:wrap !important; gap:8px !important; }
       .wm-mkt-stat { min-width:calc(50% - 8px) !important; flex:1 1 calc(50% - 8px) !important; }
-      .wm-modal { max-width:92vw !important; width:92vw !important; }
-      .wm-admin-grid { grid-template-columns:1fr !important; }
-      .wm-landing-title { font-size:38px !important; }
+      /* Multiplier row */
+      .wm-multiplier-row { flex-wrap:wrap !important; gap:6px !important; }
+      /* Leaderboard address */
+      .wm-lb-row-addr { max-width:100px !important; overflow:hidden !important; text-overflow:ellipsis !important; }
+      /* Modals */
+      .wm-resume-modal { padding:24px !important; width:92% !important; }
+      /* Landing */
+      .wm-landing-title { font-size:36px !important; }
+      .wm-landing-whale { font-size:60px !important; }
       .wm-landing-stats { gap:24px !important; }
       .wm-landing-stat-val { font-size:24px !important; }
       .wm-landing-elements { gap:4px !important; }
       .wm-landing-el { padding:4px 8px !important; font-size:11px !important; }
-      .wm-landing-btns { flex-direction:column !important; align-items:stretch !important; padding:0 20px !important; }
+      .wm-landing-btns { flex-direction:column !important; align-items:stretch !important; padding:0 16px !important; }
       .wm-landing-btn { padding:13px 24px !important; }
-      .wm-multiplier-row { flex-wrap:wrap !important; gap:6px !important; }
-      .wm-lb-row-addr { max-width:90px !important; overflow:hidden !important; text-overflow:ellipsis !important; }
-      .wm-resume-modal { padding:24px !important; width:92% !important; }
+      /* Sub-tabs (marketplace, leaderboard) */
+      .wm-sub-tabs {
+        overflow-x:auto !important;
+        -webkit-overflow-scrolling:touch !important;
+        scrollbar-width:none !important;
+        flex-wrap:nowrap !important;
+      }
+      .wm-sub-tabs::-webkit-scrollbar { display:none !important; }
+      .wm-sub-tab { white-space:nowrap !important; flex-shrink:0 !important; font-size:12px !important; padding:7px 12px !important; }
+      /* Battle moves */
+      .wm-battle-moves { flex-wrap:wrap !important; gap:8px !important; }
+      .wm-battle-moves button { flex:1 1 auto !important; min-width:0 !important; font-size:13px !important; padding:10px 14px !important; }
     }
-    /* Phone */
+
+    /* Phone (small) */
     @media(max-width:480px){
-      .wm-header { padding:8px 10px !important; }
-      .wm-header-logo { font-size:16px !important; }
+      .wm-header { padding:6px 8px !important; }
+      .wm-header-logo { font-size:14px !important; }
       .wm-header-right { gap:4px !important; }
       .wm-header-bal { display:none !important; }
-      .wm-header-addr { max-width:72px !important; font-size:9px !important; }
-      .wm-header-dc { font-size:10px !important; padding:4px 6px !important; }
-      .wm-nav { padding:4px 10px !important; gap:2px !important; }
-      .wm-nav-btn { padding:6px 8px !important; font-size:11px !important; gap:2px !important; }
-      .wm-main { padding:12px 10px !important; }
-      .wm-footer { padding:10px 10px !important; font-size:10px !important; }
+      .wm-header-addr { max-width:68px !important; font-size:9px !important; padding:3px 6px !important; }
+      .wm-header-dc { font-size:10px !important; padding:3px 6px !important; }
+      .wm-nav { padding:4px 8px !important; }
+      .wm-nav-btn { padding:6px 8px !important; font-size:11px !important; }
+      .wm-main { padding:10px 8px !important; }
+      .wm-footer { padding:8px !important; font-size:10px !important; }
       .wm-battle-mode-btn { min-width:unset !important; flex:1 1 100% !important; }
       .wm-mkt-stat { min-width:100% !important; flex:1 1 100% !important; }
-      .wm-landing-title { font-size:30px !important; }
-      .wm-landing-whale { font-size:56px !important; }
+      .wm-landing-title { font-size:28px !important; }
+      .wm-landing-whale { font-size:48px !important; }
       .wm-landing-stats { gap:16px !important; flex-wrap:wrap !important; }
       .wm-landing-stat-val { font-size:20px !important; }
       .wm-lb-row-addr { max-width:60px !important; }
-      .wm-section-heading { font-size:18px !important; }
     }
   `;
 
@@ -1775,7 +1827,7 @@ const loadCards = async () => {
 
   // ── app shell ────────────────────────────────────────────────────────────────
   const NavBtn = ({label,icon,id})=>(
-    <button className="wm-nav-btn" onClick={()=>{navigate(id);}} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,border:"none",background:page===id?"rgba(14,165,233,.12)":"transparent",color:page===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:page===id?700:500,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
+    <button className="wm-nav-btn" onClick={()=>{navigate(id);}} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,border:"none",background:page===id?"rgba(14,165,233,.12)":"transparent",color:page===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:page===id?700:500,cursor:"pointer",fontFamily:F,transition:"all .15s",flexShrink:0}}
       onMouseEnter={o=>{if(page!==id) o.currentTarget.style.color="#94a3b8";}}
       onMouseLeave={o=>{if(page!==id) o.currentTarget.style.color="#64748b";}}>
       <span style={{fontSize:16}}>{icon}</span><span className="wm-nav-label">{label}</span>
@@ -1915,19 +1967,19 @@ const loadCards = async () => {
 
       {/* header */}
       <header className="wm-header" style={{position:"sticky",top:0,zIndex:100,background:"rgba(2,8,23,.85)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,.05)",padding:"0 24px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div className="wm-header-left" onClick={()=>navigate("whales")} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+        <div onClick={()=>navigate("whales")} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",flexShrink:0}}>
           <span style={{fontSize:22}}>🐋</span>
           <span className="wm-header-logo" style={{fontSize:16,fontWeight:800,color:"#f1f5f9",letterSpacing:-.3}}>WHALEMON</span>
           <span style={{fontSize:11,color:"#0ea5e9",letterSpacing:2,fontFamily:FM}}>TCG</span>
         </div>
         <div className="wm-header-right" style={{display:"flex",alignItems:"center",gap:10}}>
           {connected ? <>
-            <div style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:20,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",fontSize:13,color:"#38bdf8"}}>
+            <div style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:20,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",fontSize:13,color:"#38bdf8",flexShrink:0}}>
               <div style={{width:6,height:6,borderRadius:"50%",background:"#4ade80"}}/>Tempo
             </div>
-            <div className="wm-header-bal" style={{padding:"5px 12px",borderRadius:20,background:"rgba(74,222,128,.08)",border:"1px solid rgba(74,222,128,.2)",fontSize:14,color:"#4ade80",fontWeight:700,fontFamily:FM}}>${balance}</div>
-            <div className="wm-header-addr" style={{padding:"5px 12px",borderRadius:20,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",fontSize:13,color:"#94a3b8",fontFamily:FM}}>{addr.slice(0,6)}…{addr.slice(-4)}</div>
-            <button className="wm-header-dc" onClick={handleDisconnect} style={{padding:"5px 12px",borderRadius:20,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,cursor:"pointer",fontFamily:F,fontWeight:600}}>Disconnect</button>
+            <div className="wm-header-bal" style={{padding:"5px 12px",borderRadius:20,background:"rgba(74,222,128,.08)",border:"1px solid rgba(74,222,128,.2)",fontSize:14,color:"#4ade80",fontWeight:700,fontFamily:FM,flexShrink:0}}>${balance}</div>
+            <div className="wm-header-addr" style={{padding:"5px 12px",borderRadius:20,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.08)",fontSize:13,color:"#94a3b8",fontFamily:FM,flexShrink:0}}>{addr.slice(0,6)}…{addr.slice(-4)}</div>
+            <button className="wm-header-dc" onClick={handleDisconnect} style={{padding:"5px 12px",borderRadius:20,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:13,cursor:"pointer",fontFamily:F,fontWeight:600,flexShrink:0}}>Disconnect</button>
           </> : <button onClick={handleConnect} style={{padding:"7px 18px",borderRadius:20,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:F}}>Connect Wallet</button>}
         </div>
       </header>
@@ -2379,9 +2431,9 @@ const loadCards = async () => {
               ))}
             </div>}
             {/* Tabs */}
-            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+            <div className="wm-sub-tabs" style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
               {[["browse","🏪 Browse"],["my-listings","📋 My Listings"],["my-cards","⚡ List My Cards"],["activities","📈 Recent Activities"]].map(([id,label])=>(
-                <button key={id} onClick={()=>{ setMktTab(id); if(id==="browse") loadMarketplace(); if(id==="activities") loadActivities(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:mktTab===id?"rgba(14,165,233,.12)":"transparent",color:mktTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:mktTab===id?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif",whiteSpace:"nowrap",flexShrink:0}}>{label}</button>
+                <button className="wm-sub-tab" key={id} onClick={()=>{ setMktTab(id); if(id==="browse") loadMarketplace(); if(id==="activities") loadActivities(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:mktTab===id?"rgba(14,165,233,.12)":"transparent",color:mktTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:mktTab===id?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{label}</button>
               ))}
             </div>
             {loadingMkt && <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/><div style={{fontSize:15}}>Loading marketplace…</div></div>}
@@ -2630,9 +2682,9 @@ const loadCards = async () => {
             )}
 
             {/* Tabs */}
-            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+            <div className="wm-sub-tabs" style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
               {[["rankings","🏆 Rankings"],["claims","🎁 My Claims"]].map(([id,label])=>(
-                <button key={id} onClick={()=>{ setLbTab(id); if(id==="claims") loadClaims(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:lbTab===id?"rgba(14,165,233,.12)":"transparent",color:lbTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:lbTab===id?700:500,cursor:"pointer",fontFamily:F,whiteSpace:"nowrap",flexShrink:0}}>{label}</button>
+                <button className="wm-sub-tab" key={id} onClick={()=>{ setLbTab(id); if(id==="claims") loadClaims(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:lbTab===id?"rgba(14,165,233,.12)":"transparent",color:lbTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:lbTab===id?700:500,cursor:"pointer",fontFamily:F}}>{label}</button>
               ))}
             </div>
 
