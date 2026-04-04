@@ -1216,10 +1216,6 @@ const loadCards = async () => {
       }
 
       // Fetch all tokenURIs and card stats in parallel
-      const [uriResults, statsResults] = await Promise.all([
-        Promise.all(ids.map(id => whel.tokenURI(id).catch(()=>null))),
-        Promise.all(ids.map(id => wCards.getCardStats(id).catch(()=>null))),
-      ]);
 
       const list=[];
       for(let i=0; i<ids.length; i++){
