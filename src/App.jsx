@@ -620,45 +620,94 @@ const loadWhales = async () => {
         const bal    = Number(await whel.balanceOf(addr));
         console.log("[whales] balance",bal);
         if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
-        console.log("[whales] scanning ownerOf for token IDs 0-3333...");
-        const ids = [];
-        const batchSize = 5;
-        for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
-          const checks = [];
-          for(let j=start; j<Math.min(start+batchSize,3333); j++){
-            checks.push(
-              whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+
+        // ── Try cache first ──
+        const cacheKey = `whalemon_whales_${addr.toLowerCase()}`;
+        let ids = [];
+        let usedCache = false;
+        try {
+          const cached = JSON.parse(localStorage.getItem(cacheKey));
+          if(cached && cached.bal === bal && Array.isArray(cached.ids) && cached.ids.length === bal) {
+            // Verify first and last cached ID still owned (quick 2-call check)
+            console.log("[whales] cache hit, verifying...");
+            const checks = cached.ids.map(id =>
+              whel.ownerOf(id).then(o => o.toLowerCase()===addr.toLowerCase()).catch(()=>false)
             );
-          }
-          const results = await Promise.all(checks);
-          for(const r of results) if(r!==null) ids.push(r);
-          if(start % 100 === 0) console.log("[whales] scanned", Math.min(start+batchSize,3333), "/ 3333, found", ids.length, "of", bal);
-          if(ids.length>=bal) break;
-          await new Promise(r=>setTimeout(r,200));
-        }
-        console.log("[whales] owned token IDs:", ids);
-        const list=[], minted=new Set();
-        for(const id of ids){
-          let img = nftImg(id);
-          try {
-            const uri = await whel.tokenURI(id);
-            if(uri.startsWith("data:application/json")){
-              const json = uri.startsWith("data:application/json;base64,")
-                ? JSON.parse(atob(uri.split(",")[1]))
-                : JSON.parse(decodeURIComponent(uri.split(",")[1]));
-              if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-            } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
-              const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
-              const resp = await fetch(fetchUrl);
-              const json = await resp.json();
-              if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+            // Verify sequentially with small delay to avoid rate limit
+            let allValid = true;
+            for(const id of cached.ids) {
+              try {
+                const owner = await whel.ownerOf(id);
+                if(owner.toLowerCase() !== addr.toLowerCase()) { allValid = false; break; }
+              } catch(_) { allValid = false; break; }
+              await new Promise(r=>setTimeout(r,100));
             }
-          } catch(e){ console.warn("tokenURI failed for",id,e); }
+            if(allValid) {
+              ids = cached.ids;
+              usedCache = true;
+              console.log("[whales] cache verified, using cached IDs:", ids);
+            } else {
+              console.log("[whales] cache invalid, rescanning...");
+              localStorage.removeItem(cacheKey);
+            }
+          }
+        } catch(_) { localStorage.removeItem(cacheKey); }
+
+        // ── Full scan if no cache ──
+        if(!usedCache) {
+          console.log("[whales] scanning ownerOf for token IDs 0-3333...");
+          const batchSize = 5;
+          for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
+            const checks = [];
+            for(let j=start; j<Math.min(start+batchSize,3333); j++){
+              checks.push(
+                whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+              );
+            }
+            const results = await Promise.all(checks);
+            for(const r of results) if(r!==null) ids.push(r);
+            if(start % 100 === 0) console.log("[whales] scanned", Math.min(start+batchSize,3333), "/ 3333, found", ids.length, "of", bal);
+            if(ids.length>=bal) break;
+            await new Promise(r=>setTimeout(r,200));
+          }
+          // Save to cache
+          try { localStorage.setItem(cacheKey, JSON.stringify({ids, bal, ts: Date.now()})); } catch(_){}
+          console.log("[whales] scan complete, cached IDs:", ids);
+        }
+
+        // ── Load metadata (sequential with delay) ──
+        const list=[], minted=new Set();
+        const imgCacheKey = `whalemon_imgs`;
+        let imgCache = {};
+        try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
+
+        for(const id of ids){
+          let img = imgCache[id] || nftImg(id);
+          if(!imgCache[id]) {
+            try {
+              const uri = await whel.tokenURI(id);
+              if(uri.startsWith("data:application/json")){
+                const json = uri.startsWith("data:application/json;base64,")
+                  ? JSON.parse(atob(uri.split(",")[1]))
+                  : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+              } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
+                const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
+                const resp = await fetch(fetchUrl);
+                const json = await resp.json();
+                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+              }
+              imgCache[id] = img;
+            } catch(e){ console.warn("tokenURI failed for",id,e); }
+            await new Promise(r=>setTimeout(r,150));
+          }
           let minted_ = false;
           try{ minted_ = await wCards.isCardMinted(id); }catch(_){}
           if(minted_) minted.add(id);
           list.push({id, image:img});
+          await new Promise(r=>setTimeout(r,100));
         }
+        try { localStorage.setItem(imgCacheKey, JSON.stringify(imgCache)); } catch(_){}
         setWhales(list); setMintedIds(minted);
       } catch(e){ console.error("loadWhales",e); toast("Could not load WHEL NFTs \u2014 check you're on Tempo","err"); }
       setLoadingW(false);
@@ -721,15 +770,37 @@ const loadMarketplace = async () => {
         soldAt: Number(l.soldAt),
       })));
 
-      // Holder count
+      // Holder count — scans all minted cards, cached per session
       try {
         const total = Number(await wc.totalSupply());
-        const owners = new Set();
-        for(let i = 0; i < Math.min(total, 500); i++) {
-          const o = await wc.ownerOf(i).catch(()=>null);
-          if(o) owners.add(o.toLowerCase());
+        // Check session cache first
+        const holderCacheKey = `whalemon_holders_${total}`;
+        const cachedHolders = sessionStorage.getItem(holderCacheKey);
+        if(cachedHolders) {
+          setHolderCount(Number(cachedHolders));
+        } else {
+          // Run scan in background so it doesn't block marketplace loading
+          setHolderCount(null); // show "…" while loading
+          (async () => {
+            try {
+              const owners = new Set();
+              const holderBatch = 5;
+              for(let i = 0; i < total; i += holderBatch) {
+                const batch = [];
+                for(let j = i; j < Math.min(i + holderBatch, total); j++) {
+                  batch.push(wc.ownerOf(j).catch(()=>null));
+                }
+                const results = await Promise.all(batch);
+                for(const o of results) if(o) owners.add(o.toLowerCase());
+                // Update count progressively so user sees it climbing
+                if(i % 50 === 0) setHolderCount(owners.size);
+                await new Promise(r=>setTimeout(r,200));
+              }
+              setHolderCount(owners.size);
+              try { sessionStorage.setItem(holderCacheKey, String(owners.size)); } catch(_){}
+            } catch(e) { console.log("holder scan error", e); }
+          })();
         }
-        setHolderCount(owners.size);
       } catch(e) { console.log("holders", e); }
 
     } catch(e){ console.error("loadMarketplace", e); }
@@ -796,6 +867,7 @@ const loadMarketplace = async () => {
         const bid = Number(ev.args.battleId);
         try {
           const b = await arena.getBattle(bid);
+          await new Promise(r=>setTimeout(r,100));
           const p1 = b.player1.toLowerCase();
           const p2 = b.player2.toLowerCase();
           const winner = b.winner.toLowerCase();
@@ -803,23 +875,26 @@ const loadMarketplace = async () => {
           const zero = "0x0000000000000000000000000000000000000000";
           const arenaAddr = CONTRACTS.BATTLE_ARENA.toLowerCase();
           if(winner===zero) continue; // draws — no wins
+          const mult = Number(b.multiplier || 1);
           if(p2===arenaAddr) {
             // AI battle
             ensure(p1);
-            if(winner===p1){ stats[p1].wins++; stats[p1].aiWins++; }
+            if(winner===p1){ stats[p1].wins += mult; stats[p1].aiWins += mult; }
             else { stats[p1].losses++; }
             continue;
           }
           ensure(p1); ensure(p2);
-          if(winner===p1){ stats[p1].wins++; stats[p1].pvpWins++; stats[p2].losses++; }
-          else           { stats[p2].wins++; stats[p2].pvpWins++; stats[p1].losses++; }
+          if(winner===p1){ stats[p1].wins += mult; stats[p1].pvpWins += mult; stats[p2].losses++; }
+          else           { stats[p2].wins += mult; stats[p2].pvpWins += mult; stats[p1].losses++; }
         } catch(_){}
       }
       // Also try reading on-chain season PvP/AI wins for current season
       for(const a of Object.keys(stats)) {
         try {
           const pvp = Number(await arena.seasonPvPWins(currentSeasonNum, a));
+          await new Promise(r=>setTimeout(r,80));
           const ai  = Number(await arena.seasonAIWins(currentSeasonNum, a));
+          await new Promise(r=>setTimeout(r,80));
           if(pvp > 0 || ai > 0) {
             stats[a].pvpWins = pvp;
             stats[a].aiWins = ai;
@@ -1173,40 +1248,82 @@ const loadCards = async () => {
         const bal    = Number(await wCards.balanceOf(addr));
         console.log("[cards] balance",bal);
         if(bal===0){ setCards([]); setLoadingC(false); return; }
-        const ids = [];
-        const batchSize = 5;
-        for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
-          const checks = [];
-          for(let j=start; j<Math.min(start+batchSize,3333); j++){
-            checks.push(
-              wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
-            );
+
+        // ── Try cache first ──
+        const cacheKey = `whalemon_cards_${addr.toLowerCase()}`;
+        let ids = [];
+        let usedCache = false;
+        try {
+          const cached = JSON.parse(localStorage.getItem(cacheKey));
+          if(cached && cached.bal === bal && Array.isArray(cached.ids) && cached.ids.length === bal) {
+            console.log("[cards] cache hit, verifying...");
+            let allValid = true;
+            for(const id of cached.ids) {
+              try {
+                const owner = await wCards.ownerOf(id);
+                if(owner.toLowerCase() !== addr.toLowerCase()) { allValid = false; break; }
+              } catch(_) { allValid = false; break; }
+              await new Promise(r=>setTimeout(r,100));
+            }
+            if(allValid) {
+              ids = cached.ids;
+              usedCache = true;
+              console.log("[cards] cache verified, using cached IDs:", ids);
+            } else {
+              console.log("[cards] cache invalid, rescanning...");
+              localStorage.removeItem(cacheKey);
+            }
           }
-          const results = await Promise.all(checks);
-          for(const r of results) if(r!==null) ids.push(r);
-          if(ids.length>=bal) break;
-          await new Promise(r=>setTimeout(r,200));
+        } catch(_) { localStorage.removeItem(cacheKey); }
+
+        // ── Full scan if no cache ──
+        if(!usedCache) {
+          const batchSize = 5;
+          for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
+            const checks = [];
+            for(let j=start; j<Math.min(start+batchSize,3333); j++){
+              checks.push(
+                wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
+              );
+            }
+            const results = await Promise.all(checks);
+            for(const r of results) if(r!==null) ids.push(r);
+            if(ids.length>=bal) break;
+            await new Promise(r=>setTimeout(r,200));
+          }
+          try { localStorage.setItem(cacheKey, JSON.stringify({ids, bal, ts: Date.now()})); } catch(_){}
+          console.log("[cards] scan complete, cached IDs:", ids);
         }
-        console.log("[cards] owned card IDs:", ids);
+
+        // ── Load metadata (sequential with delay) ──
         const list=[];
+        const imgCacheKey = `whalemon_imgs`;
+        let imgCache = {};
+        try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
+
         for(const id of ids){
           try {
-            let img = nftImg(id);
-            try {
-              const uri = await whel.tokenURI(id);
-              if(uri.startsWith("data:application/json")){
-                const json = uri.startsWith("data:application/json;base64,")
-                  ? JSON.parse(atob(uri.split(",")[1]))
-                  : JSON.parse(decodeURIComponent(uri.split(",")[1]));
-                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-              } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
-                const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
-                const resp = await fetch(fetchUrl);
-                const json = await resp.json();
-                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-              }
-            } catch(e){ console.warn("card tokenURI failed for",id,e); }
+            let img = imgCache[id] || nftImg(id);
+            if(!imgCache[id]) {
+              try {
+                const uri = await whel.tokenURI(id);
+                if(uri.startsWith("data:application/json")){
+                  const json = uri.startsWith("data:application/json;base64,")
+                    ? JSON.parse(atob(uri.split(",")[1]))
+                    : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+                } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
+                  const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
+                  const resp = await fetch(fetchUrl);
+                  const json = await resp.json();
+                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+                }
+                imgCache[id] = img;
+              } catch(e){ console.warn("card tokenURI failed for",id,e); }
+              await new Promise(r=>setTimeout(r,150));
+            }
             const raw  = await wCards.getCardStats(id);
+            await new Promise(r=>setTimeout(r,100));
             const isSet = raw[7];
             list.push({id,image:img,element:Number(raw[4]),rarity:Number(raw[5]),
               attack:Number(raw[0]),defense:Number(raw[1]),health:Number(raw[2]),speed:Number(raw[3]),
@@ -1214,6 +1331,7 @@ const loadCards = async () => {
               statsReady:isSet});
           } catch(e){ console.warn("card load",id,e); }
         }
+        try { localStorage.setItem(imgCacheKey, JSON.stringify(imgCache)); } catch(_){}
         setCards(list);
     } catch(e){ console.error("loadCards",e); }
     setLoadingC(false);
