@@ -529,6 +529,31 @@ function BattleGuide({ onClose, ELEMENTS, RARITIES, RARITY_COLORS }) {
   );
 }
 
+function LivePvPIndicator() {
+  const [openCount, setOpenCount] = useState(null);
+  useEffect(()=>{
+    let cancelled = false;
+    const check = async()=>{
+      try {
+        const prov = new BrowserProvider(window.ethereum);
+        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+        const open = await arena.getOpenBattles(0, 50);
+        if(!cancelled) setOpenCount(open.length);
+      } catch(_){}
+    };
+    check();
+    const iv = setInterval(check, 15000);
+    return ()=>{ cancelled=true; clearInterval(iv); };
+  },[]);
+  if(openCount === null) return null;
+  return (
+    <div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:20,background:openCount>0?"rgba(74,222,128,.08)":"rgba(255,255,255,.04)",border:`1px solid ${openCount>0?"rgba(74,222,128,.2)":"rgba(255,255,255,.08)"}`,fontSize:13,color:openCount>0?"#4ade80":"#475569",marginBottom:24}}>
+      <div style={{width:6,height:6,borderRadius:"50%",background:openCount>0?"#4ade80":"#475569",animation:openCount>0?"pulse 2s ease-in-out infinite":"none"}}/>
+      {openCount > 0 ? `${openCount} open PvP ${openCount===1?"battle":"battles"} waiting` : "No open PvP battles — start one!"}
+    </div>
+  );
+}
+
 
 export default function WhalemonTCG() {
   const [connected,setConnected]   = useState(false);
@@ -2239,35 +2264,7 @@ const loadCards = async () => {
                 <h2 style={{fontSize:26,fontWeight:700,color:"#f1f5f9",marginBottom:10}}>Battle Arena</h2>
                 <p style={{fontSize:15,color:"#64748b",maxWidth:400,margin:"0 auto 16px"}}>Ranked matches start at 1 PATHUSD. Use a multiplier to boost your stakes and win credits.</p>
                 {/* Live PvP activity indicator */}
-                {(()=>{
-                  const [openCount, setOpenCount] = useState(null);
-                  useEffect(()=>{
-                    let cancelled = false;
-                    (async()=>{
-                      try {
-                        const prov = await ensureTempo();
-                        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
-                        const open = await arena.getOpenBattles(0, 50);
-                        if(!cancelled) setOpenCount(open.length);
-                      } catch(_){}
-                    })();
-                    const iv = setInterval(async()=>{
-                      try {
-                        const prov = await ensureTempo();
-                        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
-                        const open = await arena.getOpenBattles(0, 50);
-                        if(!cancelled) setOpenCount(open.length);
-                      } catch(_){}
-                    }, 15000);
-                    return ()=>{ cancelled=true; clearInterval(iv); };
-                  },[]);
-                  return openCount !== null ? (
-                    <div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:20,background:openCount>0?"rgba(74,222,128,.08)":"rgba(255,255,255,.04)",border:`1px solid ${openCount>0?"rgba(74,222,128,.2)":"rgba(255,255,255,.08)"}`,fontSize:13,color:openCount>0?"#4ade80":"#475569",marginBottom:24}}>
-                      <div style={{width:6,height:6,borderRadius:"50%",background:openCount>0?"#4ade80":"#475569",animation:openCount>0?"pulse 2s ease-in-out infinite":"none"}}/>
-                      {openCount > 0 ? `${openCount} open PvP ${openCount===1?"battle":"battles"} waiting` : "No open PvP battles — start one!"}
-                    </div>
-                  ) : null;
-                })()}
+                <LivePvPIndicator />
 
                 {/* Multiplier selector */}
                 <div style={{maxWidth:420,margin:"0 auto 28px",padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
