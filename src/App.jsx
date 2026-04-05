@@ -3,9 +3,9 @@ import { BrowserProvider, Contract, formatUnits } from "ethers";
 
 const TEMPO_CHAIN_ID = "0x1079";
 const CONTRACTS = {
-  WHALE_CARDS: "0x8FB02Dedadd0340391FA550FAE70Bd9e47031c3C",
-  BATTLE_ARENA: "0x45caf7e024bb13fb58E79E79e34a468cd355F8C2",
-  MARKETPLACE: "0xe178c86E99605Df58E89C661897e8e5ABc3a08d6",
+  WHALE_CARDS: "0xf8BCe25b6CA0a90eE04baaf31a869000E0e9E425",
+  BATTLE_ARENA: "0xc7Bb2E29627a475e18Ad40a03Fe264d508A3a37e",
+  MARKETPLACE: "0xCDc6b959544de1Da892f418B5c89fFa7543010b8",
   PATHUSD:     "0x20c0000000000000000000000000000000000000",
 };
 const SOURCE_NFT_ABI = [
@@ -43,6 +43,11 @@ const WHALECARDS_ABI = [
     "function setRenderer(address) external",
     "function oracle() view returns (address)",
     "function prizePoolTarget() view returns (address)",
+    "function setBlacklist(address account, bool status) external",
+    "function blacklisted(address) view returns (bool)",
+    "function craftPoolSplitBps() view returns (uint256)",
+    "function setCraftPoolSplit(uint256 _bps) external",
+    "function owner() view returns (address)",
     "function setApprovalForAll(address,bool) external",
     "function isApprovedForAll(address,address) view returns (bool)",
     "function approve(address,uint256) external",
@@ -110,6 +115,8 @@ const BATTLE_ABI = [
   "event PrizeClaimed(uint256 indexed season, uint256 rank, address indexed player, uint256 amount)",
   "event BattleDraw(uint256 indexed battleId, address indexed player1, address indexed player2, uint256 refundEach)",
   "event BattleFinished(uint256 indexed battleId, address indexed winner, uint8 totalTurns)",
+  "function setBlacklist(address account, bool status) external",
+  "function blacklisted(address) view returns (bool)",
 ];
 const MARKETPLACE_ABI = [
   "function listCard(uint256 cardId, uint256 price) external returns (uint256)",
@@ -125,6 +132,11 @@ const MARKETPLACE_ABI = [
   "function getMarketStats() external view returns (tuple(uint256 totalVolume,uint256 totalSales,uint256 totalListings,uint256 totalOffers))",
   "function cardToListing(uint256) view returns (uint256)",
   "function platformFeeBps() view returns (uint256)",
+  "function setBlacklist(address account, bool status) external",
+  "function blacklisted(address) view returns (bool)",
+  "function owner() view returns (address)",
+  "function withdrawFees(address) external",
+  "function platformFees() view returns (uint256)",
 ];
 const MKT_DECIMALS = 18n;
 const toMkt = (val) => BigInt(Math.round(parseFloat(val) * 1e6)) * (10n ** 12n);
@@ -3157,6 +3169,29 @@ const loadCards = async () => {
                     </div>
                   </div>
                 ))}
+                {/* Craft Pool Split — uses WhaleCards contract */}
+                <div style={{padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(168,85,247,.2)"}}>
+                  <label style={{fontSize:12,color:"#a855f7",display:"block",marginBottom:6}}>Crafting Fee Split (basis points to prize pool, 5000 = 50%)</label>
+                  <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Controls how crafting fees are split. Value is the % going to prize pool. Remainder goes to platform. Default 5000 = 50/50 split.</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <input id="admin-craft-split" defaultValue="5000" style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                    <button onClick={async()=>{
+                      setAdminLoading(true);
+                      try {
+                        const prov = await ensureTempo();
+                        const signer = await prov.getSigner();
+                        const wc = new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, signer);
+                        const val = parseInt(document.getElementById("admin-craft-split").value);
+                        const tx = await wc.setCraftPoolSplit(val);
+                        await tx.wait();
+                        toast("Craft pool split updated ✓");
+                      } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                      setAdminLoading(false);
+                    }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(168,85,247,.1)",border:"1px solid rgba(168,85,247,.3)",color:"#a855f7",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>
+                      {adminLoading ? "…" : "Update"}
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -3195,12 +3230,60 @@ const loadCards = async () => {
                       const to = document.getElementById("admin-withdraw-addr").value;
                       const tx = await arena.withdrawPlatformFees(to);
                       await tx.wait();
-                      toast("Platform fees withdrawn ✓");
+                      toast("Battle platform fees withdrawn ✓");
                       loadAdminInfo();
                     } catch(e) { toast("Withdraw failed: "+(e.reason||e.message||"Unknown"),"err"); }
                     setAdminLoading(false);
                   }} disabled={adminLoading} style={{padding:"10px 20px",borderRadius:10,background:adminLoading?"#1e293b":"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",color:adminLoading?"#475569":"#000",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
-                    {adminLoading ? "Processing…" : "Withdraw Fees"}
+                    {adminLoading ? "Processing…" : "Withdraw Battle Fees"}
+                  </button>
+                </div>
+
+                {/* Crafting Fees */}
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(168,85,247,.15)"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#a855f7",marginBottom:6}}>Crafting Revenue</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>Platform's share of crafting fees (50/50 split with prize pool by default). Withdraw accumulated crafting platform fees.</div>
+                  <div style={{marginBottom:10}}>
+                    <input id="admin-withdraw-craft-addr" placeholder="0x… destination wallet" defaultValue={addr} style={{width:"100%",padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
+                  </div>
+                  <button onClick={async()=>{
+                    setAdminLoading(true);
+                    try {
+                      const prov = await ensureTempo();
+                      const signer = await prov.getSigner();
+                      const wc = new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, signer);
+                      const to = document.getElementById("admin-withdraw-craft-addr").value;
+                      const tx = await wc.withdrawCraftingFees(to);
+                      await tx.wait();
+                      toast("Crafting platform fees withdrawn ✓");
+                    } catch(e) { toast("Withdraw failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                    setAdminLoading(false);
+                  }} disabled={adminLoading} style={{padding:"10px 20px",borderRadius:10,background:adminLoading?"#1e293b":"linear-gradient(135deg,#a855f7,#7c3aed)",border:"none",color:adminLoading?"#475569":"#fff",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                    {adminLoading ? "Processing…" : "Withdraw Crafting Fees"}
+                  </button>
+                </div>
+
+                {/* Marketplace Fees */}
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(14,165,233,.15)"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#38bdf8",marginBottom:6}}>Marketplace Revenue</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:10}}>Withdraw accumulated marketplace transaction fees.</div>
+                  <div style={{marginBottom:10}}>
+                    <input id="admin-withdraw-mkt-addr" placeholder="0x… destination wallet" defaultValue={addr} style={{width:"100%",padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
+                  </div>
+                  <button onClick={async()=>{
+                    setAdminLoading(true);
+                    try {
+                      const prov = await ensureTempo();
+                      const signer = await prov.getSigner();
+                      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+                      const to = document.getElementById("admin-withdraw-mkt-addr").value;
+                      const tx = await mkt.withdrawFees(to);
+                      await tx.wait();
+                      toast("Marketplace fees withdrawn ✓");
+                    } catch(e) { toast("Withdraw failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                    setAdminLoading(false);
+                  }} disabled={adminLoading} style={{padding:"10px 20px",borderRadius:10,background:adminLoading?"#1e293b":"linear-gradient(135deg,#0ea5e9,#0284c7)",border:"none",color:adminLoading?"#475569":"#fff",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                    {adminLoading ? "Processing…" : "Withdraw Marketplace Fees"}
                   </button>
                 </div>
               </div>
@@ -3209,6 +3292,85 @@ const loadCards = async () => {
             {/* Emergency Tab */}
             {adminTab==="emergency" && (
               <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+                {/* Blacklist */}
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(245,158,11,.2)"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f59e0b",marginBottom:6}}>Blacklist Address</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.6}}>
+                    Blacklisted accounts cannot mint cards, craft, transfer, battle, or trade on the marketplace. Applied across all three contracts (WhaleCards, BattleArena, Marketplace).
+                  </div>
+                  <div style={{marginBottom:8}}>
+                    <input id="admin-bl-addr" placeholder="0x… wallet address" style={{width:"100%",padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={async()=>{
+                      setAdminLoading(true);
+                      try {
+                        const prov = await ensureTempo();
+                        const signer = await prov.getSigner();
+                        const address = document.getElementById("admin-bl-addr").value;
+                        if(!address || !address.startsWith("0x") || address.length !== 42) { toast("Enter a valid address","err"); setAdminLoading(false); return; }
+                        // Blacklist on all three contracts
+                        const wc = new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, signer);
+                        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                        const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+                        toast("Blacklisting on WhaleCards…","info");
+                        await (await wc.setBlacklist(address, true)).wait();
+                        toast("Blacklisting on BattleArena…","info");
+                        await (await arena.setBlacklist(address, true)).wait();
+                        toast("Blacklisting on Marketplace…","info");
+                        await (await mkt.setBlacklist(address, true)).wait();
+                        toast(`${address.slice(0,6)}…${address.slice(-4)} blacklisted on all contracts ✓`);
+                      } catch(e) { toast("Blacklist failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                      setAdminLoading(false);
+                    }} disabled={adminLoading} style={{flex:1,padding:"10px 16px",borderRadius:10,background:adminLoading?"#1e293b":"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.3)",color:"#f87171",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                      {adminLoading ? "Processing…" : "Blacklist"}
+                    </button>
+                    <button onClick={async()=>{
+                      setAdminLoading(true);
+                      try {
+                        const prov = await ensureTempo();
+                        const signer = await prov.getSigner();
+                        const address = document.getElementById("admin-bl-addr").value;
+                        if(!address || !address.startsWith("0x") || address.length !== 42) { toast("Enter a valid address","err"); setAdminLoading(false); return; }
+                        const wc = new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, signer);
+                        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, signer);
+                        const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+                        toast("Removing blacklist on WhaleCards…","info");
+                        await (await wc.setBlacklist(address, false)).wait();
+                        toast("Removing blacklist on BattleArena…","info");
+                        await (await arena.setBlacklist(address, false)).wait();
+                        toast("Removing blacklist on Marketplace…","info");
+                        await (await mkt.setBlacklist(address, false)).wait();
+                        toast(`${address.slice(0,6)}…${address.slice(-4)} removed from blacklist ✓`);
+                      } catch(e) { toast("Remove failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                      setAdminLoading(false);
+                    }} disabled={adminLoading} style={{flex:1,padding:"10px 16px",borderRadius:10,background:adminLoading?"#1e293b":"rgba(74,222,128,.08)",border:"1px solid rgba(74,222,128,.2)",color:"#4ade80",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>
+                      {adminLoading ? "Processing…" : "Remove Blacklist"}
+                    </button>
+                  </div>
+                  {/* Check status */}
+                  <button onClick={async()=>{
+                    try {
+                      const prov = await ensureTempo();
+                      const address = document.getElementById("admin-bl-addr").value;
+                      if(!address || !address.startsWith("0x") || address.length !== 42) { toast("Enter a valid address","err"); return; }
+                      const wc = new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, prov);
+                      const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+                      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, prov);
+                      const [blWc, blArena, blMkt] = await Promise.all([
+                        wc.blacklisted(address), arena.blacklisted(address), mkt.blacklisted(address)
+                      ]);
+                      const status = blWc && blArena && blMkt ? "BLACKLISTED on all contracts" : 
+                                     blWc || blArena || blMkt ? `Partial: WC=${blWc} BA=${blArena} MKT=${blMkt}` : "NOT blacklisted";
+                      toast(`${address.slice(0,6)}…${address.slice(-4)}: ${status}`, blWc||blArena||blMkt?"err":"ok");
+                    } catch(e) { toast("Check failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                  }} style={{marginTop:8,padding:"6px 12px",borderRadius:6,background:"rgba(255,255,255,.05)",border:"1px solid #1e293b",color:"#94a3b8",fontSize:11,cursor:"pointer",fontFamily:F}}>
+                    Check Status
+                  </button>
+                </div>
+
+                {/* Clear Prize Pool */}
                 <div style={{padding:"16px",borderRadius:12,background:"rgba(239,68,68,.04)",border:"1px solid rgba(239,68,68,.2)"}}>
                   <div style={{fontSize:14,fontWeight:700,color:"#f87171",marginBottom:6}}>Clear Prize Pool</div>
                   <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.6}}>
