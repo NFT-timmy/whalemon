@@ -3,25 +3,51 @@ import { BrowserProvider, Contract, formatUnits } from "ethers";
 
 const TEMPO_CHAIN_ID = "0x1079";
 const CONTRACTS = {
-  WHEL_NFT:    "0x3e12fcb20ad532f653f2907d2ae511364e2ae696",
-  WHALE_CARDS: "0xf482221cf5150868956D80cdE00F589dC227D78A",
-  BATTLE_ARENA: "0x5455570F937465eA32632F58499caeF76f547FE2",
-  MARKETPLACE: "0xF66E45889adDc6e330B38C0727567f2608EEC475",
+  WHALE_CARDS: "0x8FB02Dedadd0340391FA550FAE70Bd9e47031c3C",
+  BATTLE_ARENA: "0x45caf7e024bb13fb58E79E79e34a468cd355F8C2",
+  MARKETPLACE: "0xe178c86E99605Df58E89C661897e8e5ABc3a08d6",
   PATHUSD:     "0x20c0000000000000000000000000000000000000",
 };
-const WHEL_ABI = [
+const SOURCE_NFT_ABI = [
     "function balanceOf(address) view returns (uint256)",
     "function ownerOf(uint256) view returns (address)",
     "function tokenURI(uint256) view returns (string)",
+    "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
   ];
 const WHALECARDS_ABI = [
     "function balanceOf(address) view returns (uint256)",
     "function ownerOf(uint256) view returns (address)",
+    "function tokenOfOwnerByIndex(address,uint256) view returns (uint256)",
     "function getCardStats(uint256) view returns (uint16,uint16,uint16,uint16,uint8,uint8,bytes32,bool)",
-    "function isCardMinted(uint256) view returns (bool)",
-    "function mintCard(uint256) external",
-    "event CardMinted(address indexed owner, uint256 indexed whaleId, uint256 indexed cardId)",
+    "function getCardOrigin(uint256) view returns (address,uint256,bool)",
+    "function isCardMinted(address,uint256) view returns (bool)",
+    "function mintCard(uint256,uint256) external returns (uint256)",
+    "function batchMintCards(uint256,uint256[]) external returns (uint256[])",
+    "function craftCards(uint256[]) external returns (uint256)",
+    "function getCollections() view returns (tuple(address contractAddr,string name,string imageURI,bool active,uint256 totalMinted)[])",
+    "function getCollectionIdByContract(address) view returns (uint256)",
+    "function collectionCount() view returns (uint256)",
+    "function cardImageURI(uint256) view returns (string)",
+    "function nextCardId() view returns (uint256)",
+    "function getCraftTier(uint8) view returns (tuple(uint8 inputRarity,uint8 outputRarity,uint8 inputCount,uint256 cost,uint8 successRate))",
+    "function craftingPlatformFees() view returns (uint256)",
+    "function craftingPrizePoolFees() view returns (uint256)",
+    "function addCollection(address,string,string) external returns (uint256)",
+    "function setCollectionActive(uint256,bool) external",
+    "function updateCollection(uint256,string,string) external",
+    "function setOracle(address) external",
+    "function setCraftTier(uint8,uint8,uint256,uint8) external",
+    "function withdrawCraftingFees(address) external",
+    "function setPrizePoolTarget(address) external",
+    "function setRenderer(address) external",
+    "function oracle() view returns (address)",
+    "function prizePoolTarget() view returns (address)",
+    "function setApprovalForAll(address,bool) external",
+    "function isApprovedForAll(address,address) view returns (bool)",
+    "function approve(address,uint256) external",
+    "event CardMinted(address indexed owner, uint256 indexed cardId, address indexed sourceContract, uint256 sourceTokenId)",
+    "event CardCrafted(address indexed owner, uint256 indexed newCardId, uint8 outputRarity, bool success)",
   ];
 const PATHUSD_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -172,7 +198,7 @@ function Card({ card, size="md", onClick }) {
   return (
     <div style={{display:"inline-flex",flexDirection:"column",alignItems:"flex-end"}}>
     <div id={`card-${card.id}`} onClick={onClick} style={{
-      width:lg?340:250, maxWidth:"100%", borderRadius:14, background:"#0a0e1f",
+      width:lg?340:250, borderRadius:14, background:"#0a0e1f",
       border:`1.5px solid ${e.color}30`,
       boxShadow:`0 0 24px ${e.color}0d`,
       cursor:onClick?"pointer":"default", overflow:"hidden",
@@ -475,7 +501,7 @@ export default function WhalemonTCG() {
   const [balance,setBalance]       = useState("0.00");
   const [page,setPage] = useState(()=>{
     const hash = window.location.hash.replace("#","");
-    return ["whales","cards","battle","market","leaderboard","admin"].includes(hash) ? hash : "whales";
+    return ["collections","cards","battle","market","leaderboard","admin"].includes(hash) ? hash : "collections";
   });
 
   const navigate = (p) => { setPage(p); window.location.hash = p; setPicked(null); };
@@ -483,7 +509,7 @@ export default function WhalemonTCG() {
   useEffect(()=>{
     const onHash = () => {
       const hash = window.location.hash.replace("#","");
-      if(["whales","cards","battle","market","leaderboard","admin"].includes(hash)) setPage(hash);
+      if(["collections","cards","battle","market","leaderboard","admin"].includes(hash)) setPage(hash);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -491,7 +517,10 @@ export default function WhalemonTCG() {
   const [provider,setProvider]     = useState(null);
   const [notif,setNotif]           = useState(null);
 
-  // whales
+  // collections (multi-source NFTs)
+  const [collections,setCollections] = useState([]);
+  const [activeCol,setActiveCol]   = useState(0);
+  const [colNfts,setColNfts]       = useState({}); // { collectionId: [{id, image, minted}] }
   const [whales,setWhales]         = useState([]);
   const [mintedIds,setMintedIds]   = useState(new Set());
   const [loadingW,setLoadingW]     = useState(false);
@@ -503,6 +532,11 @@ export default function WhalemonTCG() {
   const [cards,setCards]           = useState([]);
   const [loadingC,setLoadingC]     = useState(false);
   const [picked,setPicked]         = useState(null);
+
+  // crafting
+  const [craftMode,setCraftMode]   = useState(false);
+  const [craftSelected,setCraftSelected] = useState([]);
+  const [craftPending,setCraftPending] = useState(false);
 
   // battle
   const [bMode,setBMode]           = useState(null);
@@ -565,7 +599,8 @@ const pvpPollRef                         = useRef(null);
   const toast = (m,t="ok") => { setNotif({m,t}); setTimeout(()=>setNotif(null),3500); };
 
   useEffect(()=>{
-    if(connected && addr && provider){ loadBalance(); loadWhales(); loadCards(); }
+    if(connected && addr && provider){ loadBalance(); loadCollections(); loadCards(); }
+    else if(!connected){ loadCollections(); } // load collections even in explore mode
     if(page==="market") loadMarketplace();
     if(page==="leaderboard"){ loadLeaderboard(); if(connected && addr) loadClaims(); }
     if(page==="admin" && isOwner) loadAdminInfo();
@@ -611,105 +646,106 @@ const pvpPollRef                         = useRef(null);
     } catch(e){ console.warn("balance",e); }
   };
 
-const loadWhales = async () => {
+const loadCollections = async () => {
       setLoadingW(true);
       try {
         const prov   = await ensureTempo();
-        const whel   = new Contract(CONTRACTS.WHEL_NFT,   WHEL_ABI,      prov);
         const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
-        const bal    = Number(await whel.balanceOf(addr));
-        console.log("[whales] balance",bal);
-        if(bal===0){ setWhales([]); setMintedIds(new Set()); toast("No WHEL NFTs found on Tempo Network","info"); setLoadingW(false); return; }
 
-        // ── Try cache first ──
-        const cacheKey = `whalemon_whales_${addr.toLowerCase()}`;
-        let ids = [];
-        let usedCache = false;
+        // Load approved collections from contract
+        let cols = [];
         try {
-          const cached = JSON.parse(localStorage.getItem(cacheKey));
-          if(cached && cached.bal === bal && Array.isArray(cached.ids) && cached.ids.length === bal) {
-            // Verify first and last cached ID still owned (quick 2-call check)
-            console.log("[whales] cache hit, verifying...");
-            const checks = cached.ids.map(id =>
-              whel.ownerOf(id).then(o => o.toLowerCase()===addr.toLowerCase()).catch(()=>false)
-            );
-            // Verify sequentially with small delay to avoid rate limit
-            let allValid = true;
-            for(const id of cached.ids) {
-              try {
-                const owner = await whel.ownerOf(id);
-                if(owner.toLowerCase() !== addr.toLowerCase()) { allValid = false; break; }
-              } catch(_) { allValid = false; break; }
-              await new Promise(r=>setTimeout(r,100));
-            }
-            if(allValid) {
-              ids = cached.ids;
-              usedCache = true;
-              console.log("[whales] cache verified, using cached IDs:", ids);
-            } else {
-              console.log("[whales] cache invalid, rescanning...");
-              localStorage.removeItem(cacheKey);
-            }
-          }
-        } catch(_) { localStorage.removeItem(cacheKey); }
+          cols = await wCards.getCollections();
+          cols = cols.map((c,i) => ({
+            id: i,
+            contractAddr: c.contractAddr,
+            name: c.name,
+            imageURI: c.imageURI,
+            active: c.active,
+            totalMinted: Number(c.totalMinted),
+          }));
+        } catch(e){ console.warn("getCollections",e); }
+        setCollections(cols);
 
-        // ── Full scan if no cache ──
-        if(!usedCache) {
-          console.log("[whales] scanning ownerOf for token IDs 0-3333...");
-          const batchSize = 5;
-          for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
-            const checks = [];
-            for(let j=start; j<Math.min(start+batchSize,3333); j++){
-              checks.push(
-                whel.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
-              );
-            }
-            const results = await Promise.all(checks);
-            for(const r of results) if(r!==null) ids.push(r);
-            if(start % 100 === 0) console.log("[whales] scanned", Math.min(start+batchSize,3333), "/ 3333, found", ids.length, "of", bal);
-            if(ids.length>=bal) break;
-            await new Promise(r=>setTimeout(r,200));
-          }
-          // Save to cache
-          try { localStorage.setItem(cacheKey, JSON.stringify({ids, bal, ts: Date.now()})); } catch(_){}
-          console.log("[whales] scan complete, cached IDs:", ids);
-        }
+        if(!connected || !addr) { setLoadingW(false); return; }
 
-        // ── Load metadata (sequential with delay) ──
-        const list=[], minted=new Set();
-        const imgCacheKey = `whalemon_imgs`;
+        // Load NFTs for each active collection the player holds
+        const allNfts = {};
+        const allMinted = new Set();
+        const allWhaleList = [];
+        const imgCacheKey = `whalemon_imgs_v2`;
         let imgCache = {};
         try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
 
-        for(const id of ids){
-          let img = imgCache[id] || nftImg(id);
-          if(!imgCache[id]) {
-            try {
-              const uri = await whel.tokenURI(id);
-              if(uri.startsWith("data:application/json")){
-                const json = uri.startsWith("data:application/json;base64,")
-                  ? JSON.parse(atob(uri.split(",")[1]))
-                  : JSON.parse(decodeURIComponent(uri.split(",")[1]));
-                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-              } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
-                const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
-                const resp = await fetch(fetchUrl);
-                const json = await resp.json();
-                if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+        for(const col of cols.filter(c=>c.active)) {
+          const src = new Contract(col.contractAddr, SOURCE_NFT_ABI, prov);
+          let bal = 0;
+          try { bal = Number(await src.balanceOf(addr)); } catch(_){}
+          if(bal === 0) { allNfts[col.id] = []; continue; }
+
+          // Use tokenOfOwnerByIndex if available, fallback to scan
+          const ids = [];
+          let usedEnum = false;
+          try {
+            for(let i=0; i<bal; i++){
+              const tid = Number(await src.tokenOfOwnerByIndex(addr, i));
+              ids.push(tid);
+              await new Promise(r=>setTimeout(r,80));
+            }
+            usedEnum = true;
+          } catch(_){
+            // Fallback: scan up to 10000
+            const batchSize = 5;
+            for(let start=0; start<10000 && ids.length<bal; start+=batchSize){
+              const checks = [];
+              for(let j=start; j<Math.min(start+batchSize,10000); j++){
+                checks.push(src.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null));
               }
-              imgCache[id] = img;
-            } catch(e){ console.warn("tokenURI failed for",id,e); }
-            await new Promise(r=>setTimeout(r,150));
+              const results = await Promise.all(checks);
+              for(const r of results) if(r!==null) ids.push(r);
+              if(ids.length>=bal) break;
+              await new Promise(r=>setTimeout(r,150));
+            }
           }
-          let minted_ = false;
-          try{ minted_ = await wCards.isCardMinted(id); }catch(_){}
-          if(minted_) minted.add(id);
-          list.push({id, image:img});
-          await new Promise(r=>setTimeout(r,100));
+
+          // Load images and minted status
+          const nftList = [];
+          for(const id of ids){
+            const cacheId = `${col.contractAddr}_${id}`;
+            let img = imgCache[cacheId] || nftImg(id);
+            if(!imgCache[cacheId]) {
+              try {
+                const uri = await src.tokenURI(id);
+                if(uri.startsWith("data:application/json")){
+                  const json = uri.startsWith("data:application/json;base64,")
+                    ? JSON.parse(atob(uri.split(",")[1]))
+                    : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+                } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
+                  const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
+                  const resp = await fetch(fetchUrl);
+                  const json = await resp.json();
+                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+                }
+                imgCache[cacheId] = img;
+              } catch(e){ console.warn("tokenURI",id,e); }
+              await new Promise(r=>setTimeout(r,100));
+            }
+            let minted_ = false;
+            try{ minted_ = await wCards.isCardMinted(col.contractAddr, id); }catch(_){}
+            if(minted_) allMinted.add(`${col.contractAddr}_${id}`);
+            const nft = {id, image:img, collectionId:col.id, sourceContract:col.contractAddr};
+            nftList.push(nft);
+            allWhaleList.push(nft);
+            await new Promise(r=>setTimeout(r,80));
+          }
+          allNfts[col.id] = nftList;
         }
         try { localStorage.setItem(imgCacheKey, JSON.stringify(imgCache)); } catch(_){}
-        setWhales(list); setMintedIds(minted);
-      } catch(e){ console.error("loadWhales",e); toast("Could not load WHEL NFTs \u2014 check you're on Tempo","err"); }
+        setColNfts(allNfts);
+        setWhales(allWhaleList);
+        setMintedIds(allMinted);
+      } catch(e){ console.error("loadCollections",e); toast("Could not load collections","err"); }
       setLoadingW(false);
     };
 
@@ -1244,91 +1280,51 @@ const loadCards = async () => {
     try {
       const prov   = await ensureTempo();
       const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
-        const whel   = new Contract(CONTRACTS.WHEL_NFT,WHEL_ABI,prov);
         const bal    = Number(await wCards.balanceOf(addr));
         console.log("[cards] balance",bal);
         if(bal===0){ setCards([]); setLoadingC(false); return; }
 
-        // ── Try cache first ──
-        const cacheKey = `whalemon_cards_${addr.toLowerCase()}`;
-        let ids = [];
-        let usedCache = false;
-        try {
-          const cached = JSON.parse(localStorage.getItem(cacheKey));
-          if(cached && cached.bal === bal && Array.isArray(cached.ids) && cached.ids.length === bal) {
-            console.log("[cards] cache hit, verifying...");
-            let allValid = true;
-            for(const id of cached.ids) {
-              try {
-                const owner = await wCards.ownerOf(id);
-                if(owner.toLowerCase() !== addr.toLowerCase()) { allValid = false; break; }
-              } catch(_) { allValid = false; break; }
-              await new Promise(r=>setTimeout(r,100));
-            }
-            if(allValid) {
-              ids = cached.ids;
-              usedCache = true;
-              console.log("[cards] cache verified, using cached IDs:", ids);
-            } else {
-              console.log("[cards] cache invalid, rescanning...");
-              localStorage.removeItem(cacheKey);
-            }
-          }
-        } catch(_) { localStorage.removeItem(cacheKey); }
-
-        // ── Full scan if no cache ──
-        if(!usedCache) {
-          const batchSize = 5;
-          for(let start=0; start<3333 && ids.length<bal; start+=batchSize){
-            const checks = [];
-            for(let j=start; j<Math.min(start+batchSize,3333); j++){
-              checks.push(
-                wCards.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null)
-              );
-            }
-            const results = await Promise.all(checks);
-            for(const r of results) if(r!==null) ids.push(r);
-            if(ids.length>=bal) break;
-            await new Promise(r=>setTimeout(r,200));
-          }
-          try { localStorage.setItem(cacheKey, JSON.stringify({ids, bal, ts: Date.now()})); } catch(_){}
-          console.log("[cards] scan complete, cached IDs:", ids);
+        // Use tokenOfOwnerByIndex for card enumeration
+        const ids = [];
+        for(let i=0; i<bal; i++){
+          try {
+            const tid = Number(await wCards.tokenOfOwnerByIndex(addr, i));
+            ids.push(tid);
+          } catch(_){}
+          await new Promise(r=>setTimeout(r,80));
         }
 
-        // ── Load metadata (sequential with delay) ──
         const list=[];
-        const imgCacheKey = `whalemon_imgs`;
+        const imgCacheKey = `whalemon_imgs_v2`;
         let imgCache = {};
         try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
 
         for(const id of ids){
           try {
-            let img = imgCache[id] || nftImg(id);
-            if(!imgCache[id]) {
-              try {
-                const uri = await whel.tokenURI(id);
-                if(uri.startsWith("data:application/json")){
-                  const json = uri.startsWith("data:application/json;base64,")
-                    ? JSON.parse(atob(uri.split(",")[1]))
-                    : JSON.parse(decodeURIComponent(uri.split(",")[1]));
-                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-                } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
-                  const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
-                  const resp = await fetch(fetchUrl);
-                  const json = await resp.json();
-                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
-                }
-                imgCache[id] = img;
-              } catch(e){ console.warn("card tokenURI failed for",id,e); }
-              await new Promise(r=>setTimeout(r,150));
-            }
             const raw  = await wCards.getCardStats(id);
-            await new Promise(r=>setTimeout(r,100));
+            const origin = await wCards.getCardOrigin(id);
             const isSet = raw[7];
+            const isCrafted = origin[2];
+            const srcContract = origin[0];
+            const srcTokenId = Number(origin[1]);
+
+            // Get image from cardImageURI or cached source NFT image
+            let img = nftImg(id);
+            try {
+              const onChainImg = await wCards.cardImageURI(id);
+              if(onChainImg && onChainImg.length > 0) {
+                img = onChainImg.startsWith("ipfs://") ? onChainImg.replace("ipfs://","https://ipfs.io/ipfs/") : onChainImg;
+              } else {
+                const cacheId = `${srcContract}_${srcTokenId}`;
+                if(imgCache[cacheId]) img = imgCache[cacheId];
+              }
+            } catch(_){}
+
+            await new Promise(r=>setTimeout(r,80));
             list.push({id,image:img,element:Number(raw[4]),rarity:Number(raw[5]),
               attack:Number(raw[0]),defense:Number(raw[1]),health:Number(raw[2]),speed:Number(raw[3]),
               ability:isSet?"Ocean Strike":"Awaiting stats...",abilityDesc:isSet?"A powerful ocean attack.":"Oracle is generating stats.",
-              statsReady:isSet});
+              statsReady:isSet,isCrafted,sourceContract:srcContract,sourceTokenId:srcTokenId});
           } catch(e){ console.warn("card load",id,e); }
         }
         try { localStorage.setItem(imgCacheKey, JSON.stringify(imgCache)); } catch(_){}
@@ -1379,28 +1375,29 @@ const loadCards = async () => {
     enterExplore(); // Stay on same page in explore mode
   };
 
-  const handleMint = async (whaleId) => {
+  const handleMint = async (collectionId, sourceTokenId, whaleData) => {
     if(!provider) return;
-    setMinting(whaleId); setRevealPhase("minting");
+    setMinting(`${collectionId}_${sourceTokenId}`); setRevealPhase("minting");
     try {
       const signer = await provider.getSigner();
       const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
-      const tx     = await wCards.mintCard(whaleId);
+      const tx     = await wCards.mintCard(collectionId, sourceTokenId);
       setRevealPhase("generating"); toast("Tx submitted — waiting…");
-      await tx.wait();
+      const receipt = await tx.wait();
       toast("Minted! Oracle is generating stats…");
       await new Promise(r=>setTimeout(r,5000));
       await loadCards(); await loadBalance();
-      const whaleData = whales.find(w=>w.id===whaleId);
-        const fresh = cards.find(c=>c.id===whaleId) || {
-          id:whaleId,image:whaleData?.image||nftImg(whaleId),
+      // Find the newly minted card
+      const freshCards = cards;
+      const fresh = freshCards.length > 0 ? freshCards[freshCards.length - 1] : {
+          id:sourceTokenId,image:whaleData?.image||nftImg(sourceTokenId),
         element:Math.floor(Math.random()*6),
         rarity:[0,0,0,1,1,2,2,3,4][Math.floor(Math.random()*9)],
         attack:30+Math.floor(Math.random()*60),defense:30+Math.floor(Math.random()*60),
         health:100+Math.floor(Math.random()*180),speed:30+Math.floor(Math.random()*60),
         ability:"Ocean Strike",abilityDesc:"A powerful ocean attack.",
       };
-      setMintedIds(p=>new Set([...p,whaleId]));
+      setMintedIds(p=>new Set([...p,`${collections[collectionId]?.contractAddr}_${sourceTokenId}`]));
       setRevealCard(fresh); setRevealPhase("done");
     } catch(e){
       console.error("mint",e);
@@ -1648,95 +1645,22 @@ const loadCards = async () => {
     @keyframes slideIn  { from{transform:translateX(110%);opacity:0} to{transform:none;opacity:1} }
     .page { animation: fadeUp .3s ease both; }
     .card-grid { display:flex; flex-wrap:wrap; gap:16px; justify-content:center; }
-
-    /* ── Mobile Responsive ─────────────────────────────────────── */
+    /* ── Mobile Responsive ─────────────────────────────────── */
     @media(max-width:768px){
-      /* Header: remove fixed height, allow wrapping */
-      .wm-header {
-        height:auto !important;
-        min-height:48px !important;
-        padding:8px 12px !important;
-        flex-wrap:wrap !important;
-        gap:8px !important;
-      }
+      .wm-header { height:auto !important; min-height:48px !important; padding:8px 12px !important; flex-wrap:wrap !important; gap:8px !important; }
       .wm-header-logo { font-size:15px !important; }
-      .wm-header-right {
-        gap:6px !important;
-        flex-wrap:wrap !important;
-        justify-content:flex-end !important;
-      }
+      .wm-header-right { gap:6px !important; flex-wrap:wrap !important; justify-content:flex-end !important; }
       .wm-header-bal { font-size:11px !important; padding:4px 8px !important; }
-      .wm-header-addr {
-        font-size:10px !important;
-        padding:4px 8px !important;
-        max-width:100px !important;
-        overflow:hidden !important;
-        text-overflow:ellipsis !important;
-      }
+      .wm-header-addr { font-size:10px !important; padding:4px 8px !important; max-width:100px !important; overflow:hidden !important; text-overflow:ellipsis !important; }
       .wm-header-dc { font-size:11px !important; padding:4px 8px !important; }
-      /* Nav: scrollable, icon-only labels */
-      .wm-nav {
-        padding:6px 12px !important;
-        gap:2px !important;
-        overflow-x:auto !important;
-        -webkit-overflow-scrolling:touch !important;
-        scrollbar-width:none !important;
-      }
+      .wm-nav { padding:6px 12px !important; gap:2px !important; overflow-x:auto !important; -webkit-overflow-scrolling:touch !important; scrollbar-width:none !important; }
       .wm-nav::-webkit-scrollbar { display:none !important; }
-      .wm-nav-btn {
-        padding:7px 10px !important;
-        font-size:12px !important;
-        white-space:nowrap !important;
-        flex-shrink:0 !important;
-      }
+      .wm-nav-btn { padding:7px 10px !important; font-size:12px !important; white-space:nowrap !important; flex-shrink:0 !important; }
       .wm-nav-btn .wm-nav-label { display:none !important; }
-      /* Main & footer */
       .wm-main { padding:16px 12px !important; }
-      .wm-footer {
-        padding:12px !important;
-        font-size:11px !important;
-        flex-wrap:wrap !important;
-        gap:4px !important;
-        justify-content:center !important;
-      }
-      /* Cards */
+      .wm-footer { padding:12px !important; font-size:11px !important; flex-wrap:wrap !important; gap:4px !important; justify-content:center !important; }
       .card-grid { gap:10px !important; }
-      /* Battle modes: 2-col */
-      .wm-battle-modes { flex-wrap:wrap !important; }
-      .wm-battle-mode-btn { min-width:120px !important; flex:1 1 calc(50% - 8px) !important; width:auto !important; }
-      /* Marketplace stats: 2-col */
-      .wm-mkt-stats { flex-wrap:wrap !important; gap:8px !important; }
-      .wm-mkt-stat { min-width:calc(50% - 8px) !important; flex:1 1 calc(50% - 8px) !important; }
-      /* Multiplier row */
-      .wm-multiplier-row { flex-wrap:wrap !important; gap:6px !important; }
-      /* Leaderboard address */
-      .wm-lb-row-addr { max-width:100px !important; overflow:hidden !important; text-overflow:ellipsis !important; }
-      /* Modals */
-      .wm-resume-modal { padding:24px !important; width:92% !important; }
-      /* Landing */
-      .wm-landing-title { font-size:36px !important; }
-      .wm-landing-whale { font-size:60px !important; }
-      .wm-landing-stats { gap:24px !important; }
-      .wm-landing-stat-val { font-size:24px !important; }
-      .wm-landing-elements { gap:4px !important; }
-      .wm-landing-el { padding:4px 8px !important; font-size:11px !important; }
-      .wm-landing-btns { flex-direction:column !important; align-items:stretch !important; padding:0 16px !important; }
-      .wm-landing-btn { padding:13px 24px !important; }
-      /* Sub-tabs (marketplace, leaderboard) */
-      .wm-sub-tabs {
-        overflow-x:auto !important;
-        -webkit-overflow-scrolling:touch !important;
-        scrollbar-width:none !important;
-        flex-wrap:nowrap !important;
-      }
-      .wm-sub-tabs::-webkit-scrollbar { display:none !important; }
-      .wm-sub-tab { white-space:nowrap !important; flex-shrink:0 !important; font-size:12px !important; padding:7px 12px !important; }
-      /* Battle moves */
-      .wm-battle-moves { flex-wrap:wrap !important; gap:8px !important; }
-      .wm-battle-moves button { flex:1 1 auto !important; min-width:0 !important; font-size:13px !important; padding:10px 14px !important; }
     }
-
-    /* Phone (small) */
     @media(max-width:480px){
       .wm-header { padding:6px 8px !important; }
       .wm-header-logo { font-size:14px !important; }
@@ -1748,13 +1672,6 @@ const loadCards = async () => {
       .wm-nav-btn { padding:6px 8px !important; font-size:11px !important; }
       .wm-main { padding:10px 8px !important; }
       .wm-footer { padding:8px !important; font-size:10px !important; }
-      .wm-battle-mode-btn { min-width:unset !important; flex:1 1 100% !important; }
-      .wm-mkt-stat { min-width:100% !important; flex:1 1 100% !important; }
-      .wm-landing-title { font-size:28px !important; }
-      .wm-landing-whale { font-size:48px !important; }
-      .wm-landing-stats { gap:16px !important; flex-wrap:wrap !important; }
-      .wm-landing-stat-val { font-size:20px !important; }
-      .wm-lb-row-addr { max-width:60px !important; }
     }
   `;
 
@@ -1792,31 +1709,31 @@ const loadCards = async () => {
       <style>{css}</style>
       <div style={{position:"absolute",top:"30%",left:"50%",transform:"translate(-50%,-50%)",width:600,height:600,borderRadius:"50%",background:"radial-gradient(circle,rgba(14,165,233,.07),transparent 70%)",pointerEvents:"none"}}/>
       <div style={{position:"relative",zIndex:1,textAlign:"center",animation:"fadeUp .7s ease"}}>
-        <div className="wm-landing-whale" style={{fontSize:80,animation:"float 4s ease-in-out infinite",marginBottom:20}}>🐋</div>
-        <h1 className="wm-landing-title" style={{fontSize:52,fontWeight:800,background:"linear-gradient(135deg,#38bdf8,#818cf8,#38bdf8)",backgroundSize:"200%",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",animation:"shimmer 4s linear infinite",letterSpacing:-2,lineHeight:1.1,marginBottom:12}}>WHALEMON</h1>
+        <div style={{fontSize:80,animation:"float 4s ease-in-out infinite",marginBottom:20}}>🐋</div>
+        <h1 style={{fontSize:52,fontWeight:800,background:"linear-gradient(135deg,#38bdf8,#818cf8,#38bdf8)",backgroundSize:"200%",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",animation:"shimmer 4s linear infinite",letterSpacing:-2,lineHeight:1.1,marginBottom:12}}>WHALEMON</h1>
         <p style={{fontSize:14,color:"#475569",letterSpacing:6,textTransform:"uppercase",marginBottom:40}}>Trading Card Game</p>
-        <div className="wm-landing-elements" style={{display:"flex",gap:8,justifyContent:"center",marginBottom:40,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:40,flexWrap:"wrap"}}>
           {ELEMENTS.map((e,i)=>(
-            <span className="wm-landing-el" key={i} style={{padding:"6px 14px",borderRadius:20,border:`1px solid ${e.color}40`,color:e.color,fontSize:13,background:`${e.color}0d`}}>{e.icon} {e.name}</span>
+            <span key={i} style={{padding:"6px 14px",borderRadius:20,border:`1px solid ${e.color}40`,color:e.color,fontSize:13,background:`${e.color}0d`}}>{e.icon} {e.name}</span>
           ))}
         </div>
-        <div className="wm-landing-btns" style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
-          <button className="wm-landing-btn" onClick={handleConnect} style={{padding:"15px 48px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F,letterSpacing:.3,boxShadow:"0 4px 32px rgba(14,165,233,.35)",transition:"transform .15s,box-shadow .15s"}}
+        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          <button onClick={handleConnect} style={{padding:"15px 48px",borderRadius:12,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:F,letterSpacing:.3,boxShadow:"0 4px 32px rgba(14,165,233,.35)",transition:"transform .15s,box-shadow .15s"}}
             onMouseEnter={o=>{o.currentTarget.style.transform="scale(1.03)";o.currentTarget.style.boxShadow="0 6px 40px rgba(14,165,233,.5)";}}
             onMouseLeave={o=>{o.currentTarget.style.transform="none";o.currentTarget.style.boxShadow="0 4px 32px rgba(14,165,233,.35)";}}>
             Connect Wallet
           </button>
-          <button className="wm-landing-btn" onClick={()=>enterExplore()} style={{padding:"15px 48px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:16,fontWeight:600,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
+          <button onClick={()=>enterExplore()} style={{padding:"15px 48px",borderRadius:12,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:16,fontWeight:600,cursor:"pointer",fontFamily:F,transition:"all .15s"}}
             onMouseEnter={o=>{o.currentTarget.style.background="rgba(255,255,255,.08)";o.currentTarget.style.color="#f1f5f9";}}
             onMouseLeave={o=>{o.currentTarget.style.background="rgba(255,255,255,.05)";o.currentTarget.style.color="#94a3b8";}}>
             Explore App
           </button>
         </div>
         <p style={{marginTop:12,fontSize:13,color:"#334155"}}>Tempo Network · Gas in PATHUSD</p>
-        <div className="wm-landing-stats" style={{marginTop:56,display:"flex",gap:40,justifyContent:"center"}}>
+        <div style={{marginTop:56,display:"flex",gap:40,justifyContent:"center"}}>
           {[["3,333","Whales"],["6","Elements"],["∞","Battles"]].map(([v,l],i)=>(
             <div key={i} style={{textAlign:"center"}}>
-              <div className="wm-landing-stat-val" style={{fontSize:30,fontWeight:800,color:"#f1f5f9",lineHeight:1}}>{v}</div>
+              <div style={{fontSize:30,fontWeight:800,color:"#f1f5f9",lineHeight:1}}>{v}</div>
               <div style={{fontSize:12,color:"#475569",textTransform:"uppercase",letterSpacing:2,marginTop:4}}>{l}</div>
             </div>
           ))}
@@ -1840,7 +1757,7 @@ const loadCards = async () => {
 
 {resumeBattle && (
   <div style={{position:"fixed",inset:0,zIndex:1000,background:"rgba(2,8,23,.95)",backdropFilter:"blur(16px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",animation:"fadeIn .3s"}}>
-    <div className="wm-resume-modal" style={{background:"#0a0e1f",borderRadius:20,border:"1px solid #1e293b",padding:36,maxWidth:420,width:"90%",textAlign:"center"}}>
+    <div style={{background:"#0a0e1f",borderRadius:20,border:"1px solid #1e293b",padding:36,maxWidth:420,width:"90%",textAlign:"center"}}>
       <div style={{fontSize:48,marginBottom:16}}>⚔️</div>
       <h2 style={{fontSize:22,fontWeight:700,color:"#f1f5f9",marginBottom:8}}>Active Battle Found</h2>
       <p style={{fontSize:14,color:"#64748b",marginBottom:24}}>You have an unfinished ranked battle (Turn {Number(resumeBattle.battle.turn)}). Resume or abandon it.</p>
@@ -1967,7 +1884,7 @@ const loadCards = async () => {
 
       {/* header */}
       <header className="wm-header" style={{position:"sticky",top:0,zIndex:100,background:"rgba(2,8,23,.85)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,.05)",padding:"0 24px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div onClick={()=>navigate("whales")} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",flexShrink:0}}>
+        <div onClick={()=>navigate("collections")} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",flexShrink:0}}>
           <span style={{fontSize:22}}>🐋</span>
           <span className="wm-header-logo" style={{fontSize:16,fontWeight:800,color:"#f1f5f9",letterSpacing:-.3}}>WHALEMON</span>
           <span style={{fontSize:11,color:"#0ea5e9",letterSpacing:2,fontFamily:FM}}>TCG</span>
@@ -1986,7 +1903,7 @@ const loadCards = async () => {
 
       {/* nav */}
       <nav className="wm-nav" style={{background:"rgba(2,8,23,.6)",borderBottom:"1px solid rgba(255,255,255,.04)",padding:"0 24px",display:"flex",gap:4,overflowX:"auto"}}>
-        <NavBtn label="My Whales"   icon="🐋" id="whales"/>
+        <NavBtn label="Collections" icon="🌊" id="collections"/>
         <NavBtn label="My Cards"    icon="🃏" id="cards"/>
         <NavBtn label="Battle"      icon="⚔️" id="battle"/>
         <NavBtn label="Marketplace" icon="🏪" id="market"/>
@@ -1998,50 +1915,74 @@ const loadCards = async () => {
       <main className="wm-main" style={{flex:1,padding:"28px 24px",maxWidth:1200,width:"100%",margin:"0 auto"}}>
 
         {/* ── WHALES ── */}
-        {page==="whales" && (
+        {page==="collections" && (
           <div className="page">
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
-                <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:6}}>My Whales</h2>
-                <p style={{fontSize:14,color:"#64748b"}}>Generate one Whalemon card per WHEL NFT — free, gas only.</p>
+                <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>My Collections</h2>
+                <p style={{fontSize:13,color:"#64748b"}}>Generate Whalemon cards from your NFTs — free, gas only.</p>
               </div>
-              <button onClick={()=>{loadWhales();loadCards();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600}}>↻ Refresh</button>
+              <button onClick={()=>{loadCollections();loadCards();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600,flexShrink:0}}>↻ Refresh</button>
             </div>
+
+            {/* Collection tabs */}
+            {collections.filter(c=>c.active).length > 0 && (
+              <div style={{display:"flex",gap:6,marginBottom:20,overflowX:"auto",paddingBottom:8,WebkitOverflowScrolling:"touch"}}>
+                {collections.filter(c=>c.active).map(col=>{
+                  const nfts = colNfts[col.id] || [];
+                  const isActive = activeCol === col.id;
+                  return (
+                    <button key={col.id} onClick={()=>setActiveCol(col.id)} style={{
+                      display:"flex",alignItems:"center",gap:8,padding:"8px 14px",borderRadius:10,
+                      border:`1px solid ${isActive?"rgba(14,165,233,.4)":"#1e293b"}`,
+                      background:isActive?"rgba(14,165,233,.1)":"#0a0e1f",
+                      color:isActive?"#38bdf8":"#94a3b8",fontSize:13,fontWeight:isActive?700:500,
+                      cursor:"pointer",fontFamily:F,flexShrink:0,transition:"all .15s"
+                    }}>
+                      {col.imageURI && <img src={col.imageURI} alt="" style={{width:22,height:22,borderRadius:6,objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>}
+                      <span>{col.name}</span>
+                      {connected && <span style={{fontSize:11,opacity:.7}}>({nfts.length})</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {loadingW && <div style={{textAlign:"center",padding:60,color:"#475569"}}>
               <div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/>
-              <div style={{fontSize:15}}>Loading your WHEL NFTs…</div>
+              <div style={{fontSize:15}}>Loading your NFTs…</div>
             </div>}
 
-            {!loadingW && whales.length===0 && (
+            {!loadingW && (!connected || (colNfts[activeCol]||[]).length===0) && (
               <div style={{textAlign:"center",padding:80,color:"#334155"}}>
-                <div style={{fontSize:48,marginBottom:16}}>🐋</div>
-                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>{connected ? "No WHEL NFTs in your wallet" : "Connect your wallet to view your Whales"}</div>
-                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? "You need WHEL NFTs to generate Whalemon cards." : "Or get WHEL NFTs from the Whelmart collection."}</div>
-                <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
-                  {connected && <button onClick={loadWhales} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>}
-                  <a href="https://www.stablewhel.xyz/collection/4217/0x3e12fcb20ad532f653f2907d2ae511364e2ae696" target="_blank" rel="noopener noreferrer" style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F,textDecoration:"none",display:"inline-block"}}>🐋 Whale Up from Whelmart →</a>
-                </div>
+                <div style={{fontSize:48,marginBottom:16}}>🌊</div>
+                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>{connected ? `No ${collections[activeCol]?.name||"NFTs"} in your wallet` : "Connect your wallet to view your NFTs"}</div>
+                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? "You need NFTs from an approved collection to generate Whalemon cards." : "Or browse the app in explore mode."}</div>
+                {connected && <button onClick={loadCollections} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>}
               </div>
             )}
 
             <div className="card-grid">
-              {whales.map(w=>(
-                <div key={w.id} style={{width:190,borderRadius:14,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden",transition:"transform .18s"}}>
+              {(colNfts[activeCol]||[]).map(w=>{
+                const mintKey = `${w.sourceContract}_${w.id}`;
+                const isMinted = mintedIds.has(mintKey);
+                const isMintingThis = minting === `${w.collectionId}_${w.id}`;
+                return (
+                <div key={mintKey} style={{width:190,maxWidth:"100%",borderRadius:14,background:"#0a0e1f",border:"1px solid #1e293b",overflow:"hidden",transition:"transform .18s"}}>
                   <div style={{height:220,background:"linear-gradient(135deg,#0c4a6e,#0ea5e9)",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
                       <img src={w.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",inset:0}} onError={o=>{o.target.style.display="none";o.target.nextSibling.style.display="block";}}/>
                       <span style={{fontSize:48,position:"relative",zIndex:1,display:"none"}}>🐋</span>
                     <div style={{position:"absolute",top:8,left:8,padding:"3px 8px",borderRadius:6,background:"rgba(0,0,0,.6)",fontSize:12,color:"#f1f5f9",fontWeight:700,fontFamily:FM}}>#{w.id}</div>
                   </div>
                   <div style={{padding:12}}>
-                    {mintedIds.has(w.id)
-                      ? <div style={{padding:"9px 0",textAlign:"center",fontSize:13,fontWeight:700,borderRadius:9,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",letterSpacing:.3}}>🐋 Whalemon Birthed</div>
-                      : <button onClick={()=>handleMint(w.id)} disabled={minting===w.id} style={{width:"100%",padding:"9px 0",borderRadius:9,background:minting===w.id?"#1e293b":"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:minting===w.id?"#475569":"#fff",fontSize:14,fontWeight:700,cursor:minting===w.id?"not-allowed":"pointer",fontFamily:F}}>
-                          {minting===w.id?"Minting…":"⚡ Generate Card"}
+                    {isMinted
+                      ? <div style={{padding:"9px 0",textAlign:"center",fontSize:13,fontWeight:700,borderRadius:9,background:"rgba(139,92,246,.08)",border:"1px solid rgba(139,92,246,.2)",color:"#a78bfa",letterSpacing:.3}}>✓ Card Generated</div>
+                      : <button onClick={()=>handleMint(w.collectionId, w.id, w)} disabled={isMintingThis} style={{width:"100%",padding:"9px 0",borderRadius:9,background:isMintingThis?"#1e293b":"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:isMintingThis?"#475569":"#fff",fontSize:14,fontWeight:700,cursor:isMintingThis?"not-allowed":"pointer",fontFamily:F}}>
+                          {isMintingThis?"Minting…":"⚡ Generate Card"}
                         </button>}
                   </div>
                 </div>
-              ))}
+              );})}
             </div>
           </div>
         )}
@@ -2049,13 +1990,72 @@ const loadCards = async () => {
         {/* ── CARDS ── */}
         {page==="cards" && (
           <div className="page">
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
               <div>
-                <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:6}}>My Cards</h2>
-                <p style={{fontSize:14,color:"#64748b"}}>Your battle-ready Whalemon cards.</p>
+                <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>My Cards</h2>
+                <p style={{fontSize:13,color:"#64748b"}}>Your battle-ready Whalemon cards. Craft cards to upgrade rarity.</p>
               </div>
-              <button onClick={loadCards} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600}}>↻ Refresh</button>
+              <div style={{display:"flex",gap:8,flexShrink:0}}>
+                {connected && cards.length>=3 && <button onClick={()=>{setCraftMode(!craftMode);setCraftSelected([]);}} style={{padding:"8px 18px",borderRadius:10,background:craftMode?"rgba(245,158,11,.12)":"rgba(139,92,246,.08)",border:`1px solid ${craftMode?"rgba(245,158,11,.3)":"rgba(139,92,246,.2)"}`,color:craftMode?"#f59e0b":"#a78bfa",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600}}>{craftMode?"✕ Cancel":"⚒️ Craft"}</button>}
+                <button onClick={loadCards} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600,flexShrink:0}}>↻ Refresh</button>
+              </div>
             </div>
+
+            {/* Crafting info bar */}
+            {craftMode && (
+              <div style={{padding:"14px 16px",borderRadius:12,background:"rgba(245,158,11,.06)",border:"1px solid rgba(245,158,11,.15)",marginBottom:20}}>
+                <div style={{fontSize:13,fontWeight:700,color:"#f59e0b",marginBottom:6}}>⚒️ Crafting Mode</div>
+                <div style={{fontSize:12,color:"#94a3b8",lineHeight:1.6,marginBottom:8}}>Select same-rarity cards from the same collection to craft a higher tier. Cards are burned on craft — your best card is returned if it fails.</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",fontSize:11,color:"#64748b"}}>
+                  {[["3 Common → Uncommon","2 PATHUSD","100%"],["3 Uncommon → Rare","5 PATHUSD","85%"],["4 Rare → Epic","15 PATHUSD","60%"],["5 Epic → Legendary","50 PATHUSD","35%"]].map(([t,c,r])=>(
+                    <span key={t} style={{padding:"4px 8px",borderRadius:6,background:"#0a0e1f",border:"1px solid #1e293b"}}>{t} · {c} · {r}</span>
+                  ))}
+                </div>
+                {craftSelected.length > 0 && (() => {
+                  const firstCard = cards.find(c=>c.id===craftSelected[0]);
+                  if(!firstCard) return null;
+                  const tierMap = {0:{need:3,cost:"2",rate:"100%",out:"Uncommon"},1:{need:3,cost:"5",rate:"85%",out:"Rare"},2:{need:4,cost:"15",rate:"60%",out:"Epic"},3:{need:5,cost:"50",rate:"35%",out:"Legendary"}};
+                  const tier = tierMap[firstCard.rarity];
+                  if(!tier) return null;
+                  const ready = craftSelected.length === tier.need;
+                  return (
+                    <div style={{marginTop:12,padding:"12px 14px",borderRadius:10,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                      <div style={{fontSize:13,color:"#f1f5f9",marginBottom:6}}>Selected: <strong>{craftSelected.length} / {tier.need}</strong> {RARITIES[firstCard.rarity]} cards → <span style={{color:RARITY_COLORS[firstCard.rarity+1]||"#f59e0b"}}>{tier.out}</span></div>
+                      <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>Cost: {tier.cost} PATHUSD · Success: {tier.rate}</div>
+                      <button onClick={async()=>{
+                        if(!ready) return;
+                        setCraftPending(true);
+                        try {
+                          const signer = await provider.getSigner();
+                          const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
+                          // Approve PATHUSD
+                          const pathusd = new Contract(CONTRACTS.PATHUSD,PATHUSD_ABI,signer);
+                          const cost = tier.cost === "2" ? BigInt(2e18) : tier.cost === "5" ? BigInt(5e18) : tier.cost === "15" ? BigInt(15e18) : BigInt(50e18);
+                          const allowance = await pathusd.allowance(addr, CONTRACTS.WHALE_CARDS);
+                          if(allowance < cost) {
+                            const appTx = await pathusd.approve(CONTRACTS.WHALE_CARDS, cost);
+                            await appTx.wait();
+                          }
+                          const tx = await wCards.craftCards(craftSelected);
+                          toast("Crafting — confirm in your wallet…");
+                          const receipt = await tx.wait();
+                          // Check for CardCrafted event
+                          const iface = new (await import("ethers")).Interface(WHALECARDS_ABI);
+                          let success = false;
+                          for(const log of receipt.logs) {
+                            try { const parsed = iface.parseLog(log); if(parsed && parsed.name==="CardCrafted") { success = parsed.args[3]; break; } } catch(_){}
+                          }
+                          if(success) toast("⚒️ Craft successful! New card minted!"); else toast("Craft failed — your best card was returned.","info");
+                          setCraftMode(false); setCraftSelected([]);
+                          await loadCards(); await loadBalance();
+                        } catch(e){ toast("Craft failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                        setCraftPending(false);
+                      }} disabled={!ready||craftPending} style={{padding:"10px 24px",borderRadius:10,background:!ready||craftPending?"#1e293b":"linear-gradient(135deg,#f59e0b,#d97706)",border:"none",color:!ready||craftPending?"#475569":"#000",fontSize:14,fontWeight:700,cursor:!ready||craftPending?"not-allowed":"pointer",fontFamily:F}}>{craftPending?"Crafting…":ready?`⚒️ Craft ${tier.out}`:`Select ${tier.need - craftSelected.length} more`}</button>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             {loadingC && <div style={{textAlign:"center",padding:60,color:"#475569"}}>
               <div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/>
@@ -2066,9 +2066,9 @@ const loadCards = async () => {
               <div style={{textAlign:"center",padding:80,color:"#334155"}}>
                 <div style={{fontSize:48,marginBottom:16}}>🃏</div>
                 <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>No Whalemon Trading Cards yet</div>
-                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? "Generate cards from your WHEL NFTs, or pick one up from the Marketplace." : "Connect your wallet to view your cards, or browse the Marketplace."}</div>
+                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? "Generate cards from your NFT collections, or pick one up from the Marketplace." : "Connect your wallet to view your cards, or browse the Marketplace."}</div>
                 <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
-                  {connected && <button onClick={()=>navigate("whales")} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Generate from My Whales →</button>}
+                  {connected && <button onClick={()=>navigate("collections")} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Generate from Collections →</button>}
                   <button onClick={()=>navigate("market")} style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F}}>Browse Marketplace →</button>
                 </div>
               </div>
@@ -2076,7 +2076,23 @@ const loadCards = async () => {
 
             <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
               <div className="card-grid" style={{flex:1}}>
-                {cards.map(c=><Card key={c.id} card={c} onClick={()=>setPicked(c)}/>)}
+                {cards.map(c=>{
+                  const isSelected = craftSelected.includes(c.id);
+                  const firstCard = craftSelected.length > 0 ? cards.find(x=>x.id===craftSelected[0]) : null;
+                  const canSelect = craftMode && c.statsReady && c.rarity < 4 && (craftSelected.length===0 || (firstCard && c.rarity===firstCard.rarity && c.sourceContract===firstCard.sourceContract));
+                  return (
+                    <div key={c.id} style={{position:"relative"}}>
+                      {c.isCrafted && <div style={{position:"absolute",top:8,left:8,zIndex:2,padding:"3px 8px",borderRadius:6,background:"rgba(245,158,11,.85)",fontSize:10,fontWeight:700,color:"#000",letterSpacing:.5}}>⚒ CRAFTED</div>}
+                      {craftMode && <div onClick={()=>{
+                        if(isSelected) setCraftSelected(p=>p.filter(x=>x!==c.id));
+                        else if(canSelect) setCraftSelected(p=>[...p,c.id]);
+                      }} style={{position:"absolute",inset:0,zIndex:3,cursor:canSelect||isSelected?"pointer":"not-allowed",background:isSelected?"rgba(245,158,11,.15)":canSelect?"transparent":"rgba(0,0,0,.4)",borderRadius:14,border:isSelected?"2px solid #f59e0b":"2px solid transparent",display:"flex",alignItems:"flex-start",justifyContent:"flex-end",padding:8}}>
+                        {isSelected && <div style={{width:24,height:24,borderRadius:"50%",background:"#f59e0b",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#000",fontWeight:800}}>✓</div>}
+                      </div>}
+                      <Card card={c} onClick={craftMode?undefined:()=>setPicked(c)}/>
+                    </div>
+                  );
+                })}
               </div>
              {picked && (
                   <div style={{position:"fixed",inset:0,zIndex:900,background:"rgba(0,0,0,.88)",backdropFilter:"blur(16px)",display:"flex",alignItems:"flex-start",justifyContent:"center",animation:"fadeIn .2s",padding:"60px 20px 20px"}} onClick={()=>{setPicked(null);setShowSendModal(false);setSendRecipient("");}}>
@@ -2188,7 +2204,7 @@ const loadCards = async () => {
                 {/* Multiplier selector */}
                 <div style={{maxWidth:420,margin:"0 auto 28px",padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
                   <div style={{fontSize:12,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Battle Multiplier</div>
-                  <div className="wm-multiplier-row" style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:10}}>
+                  <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:10}}>
                     {[1,2,5,10,25,50].map(m=>(
                       <button key={m} onClick={()=>setBattleMultiplier(m)} style={{
                         padding:"8px 14px",borderRadius:8,fontSize:13,fontWeight:battleMultiplier===m?700:500,cursor:"pointer",fontFamily:F,
@@ -2218,12 +2234,12 @@ const loadCards = async () => {
                   })()}
                 </div>
 
-                <div className="wm-battle-modes" style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:14,justifyContent:"center",flexWrap:"wrap"}}>
                   {[{m:"free",ic:"🎯",t:"Practice",d:"vs AI · Free",c:"#22c55e"},
                     {m:"ranked-ai",ic:"🤖",t:"Ranked AI",d:`vs AI · ${battleMultiplier}× stakes`,c:"#0ea5e9"},
                     {m:"pvp",ic:"👥",t:"Ranked PvP",d:`vs Player · ${battleMultiplier}× stakes`,c:"#8b5cf6"},
                     {m:"guide",ic:"📖",t:"Battle Guide",d:"Strategy & Tips",c:"#f59e0b"}].map(x=>(
-                    <button className="wm-battle-mode-btn" key={x.m} onClick={()=>x.m==="guide"?setBState("guide"):startBattle(x.m)} style={{width:160,padding:"22px 16px",borderRadius:14,background:"#0a0e1f",border:`1px solid ${x.c}25`,cursor:"pointer",textAlign:"center",transition:"all .2s",fontFamily:F}}
+                    <button key={x.m} onClick={()=>x.m==="guide"?setBState("guide"):startBattle(x.m)} style={{width:160,padding:"22px 16px",borderRadius:14,background:"#0a0e1f",border:`1px solid ${x.c}25`,cursor:"pointer",textAlign:"center",transition:"all .2s",fontFamily:F}}
                       onMouseEnter={o=>{o.currentTarget.style.borderColor=x.c;o.currentTarget.style.transform="translateY(-3px)";}}
                       onMouseLeave={o=>{o.currentTarget.style.borderColor=`${x.c}25`;o.currentTarget.style.transform="none";}}>
                       <div style={{fontSize:28,marginBottom:8}}>{x.ic}</div>
@@ -2331,7 +2347,7 @@ const loadCards = async () => {
 {bMode==="pvp" && !bResult && battleId && (
   <InactivityTimer battleId={battleId} addr={addr} provider={provider} CONTRACTS={CONTRACTS} BATTLE_ABI={BATTLE_ABI} onClaimed={async()=>{ const arena=new Contract(CONTRACTS.BATTLE_ARENA,BATTLE_ABI,provider); const b=await arena.getBattle(battleId); const won=b.winner.toLowerCase()===addr.toLowerCase(); setBResult(won?"win":"lose"); await loadBalance(); }}/>
 )}
-                {!bResult && <div className="wm-battle-moves" style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+                {!bResult && <div style={{display:"flex",gap:10,justifyContent:"center"}}>
                   {[["⚔️ Attack","atk","linear-gradient(135deg,#dc2626,#b91c1c)"],
                     [`🌀 ${pCard.ability}${bCd>0?` (${bCd})`:""}` ,"ab","linear-gradient(135deg,#7c3aed,#5b21b6)",bCd>0],
                     ["🛡️ Defend","def","linear-gradient(135deg,#0ea5e9,#0284c7)"]].map(([lbl,mv,bg,dis])=>(
@@ -2416,7 +2432,7 @@ const loadCards = async () => {
               <button onClick={()=>{loadMarketplace();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif",fontWeight:600}}>↻ Refresh</button>
             </div>
             {/* Stats */}
-            {mktStats && <div className="wm-mkt-stats" style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+            {mktStats && <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
               {[
                 ["🏷 Floor",mktStats.floor ? `$${mktStats.floor}` : "—","#4ade80"],
                 ["📊 24h Vol",`$${mktStats.vol24h}`,"#38bdf8"],
@@ -2424,16 +2440,16 @@ const loadCards = async () => {
                 ["🤝 Top Offer",mktStats.topOffer ? `$${mktStats.topOffer}` : "—","#a855f7"],
                 ["👥 Holders",holderCount !== null ? holderCount : "…","#f472b6"],
               ].map(([l,v,c])=>(
-                <div className="wm-mkt-stat" key={l} style={{flex:"1 1 90px",padding:"10px 12px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",minWidth:80}}>
+                <div key={l} style={{flex:"1 1 90px",padding:"10px 12px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b",minWidth:80}}>
                   <div style={{fontSize:11,color:"#475569",marginBottom:3}}>{l}</div>
                   <div style={{fontSize:17,fontWeight:800,color:c,fontFamily:"'JetBrains Mono',monospace"}}>{v}</div>
                 </div>
               ))}
             </div>}
             {/* Tabs */}
-            <div className="wm-sub-tabs" style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
+            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
               {[["browse","🏪 Browse"],["my-listings","📋 My Listings"],["my-cards","⚡ List My Cards"],["activities","📈 Recent Activities"]].map(([id,label])=>(
-                <button className="wm-sub-tab" key={id} onClick={()=>{ setMktTab(id); if(id==="browse") loadMarketplace(); if(id==="activities") loadActivities(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:mktTab===id?"rgba(14,165,233,.12)":"transparent",color:mktTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:mktTab===id?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{label}</button>
+                <button key={id} onClick={()=>{ setMktTab(id); if(id==="browse") loadMarketplace(); if(id==="activities") loadActivities(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:mktTab===id?"rgba(14,165,233,.12)":"transparent",color:mktTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:mktTab===id?700:500,cursor:"pointer",fontFamily:"'Inter',-apple-system,sans-serif"}}>{label}</button>
               ))}
             </div>
             {loadingMkt && <div style={{textAlign:"center",padding:60,color:"#475569"}}><div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/><div style={{fontSize:15}}>Loading marketplace…</div></div>}
@@ -2682,9 +2698,9 @@ const loadCards = async () => {
             )}
 
             {/* Tabs */}
-            <div className="wm-sub-tabs" style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
+            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12}}>
               {[["rankings","🏆 Rankings"],["claims","🎁 My Claims"]].map(([id,label])=>(
-                <button className="wm-sub-tab" key={id} onClick={()=>{ setLbTab(id); if(id==="claims") loadClaims(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:lbTab===id?"rgba(14,165,233,.12)":"transparent",color:lbTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:lbTab===id?700:500,cursor:"pointer",fontFamily:F}}>{label}</button>
+                <button key={id} onClick={()=>{ setLbTab(id); if(id==="claims") loadClaims(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:lbTab===id?"rgba(14,165,233,.12)":"transparent",color:lbTab===id?"#38bdf8":"#64748b",fontSize:14,fontWeight:lbTab===id?700:500,cursor:"pointer",fontFamily:F}}>{label}</button>
               ))}
             </div>
 
@@ -2717,7 +2733,7 @@ const loadCards = async () => {
                           </div>
                           <div style={{width:36,height:36,borderRadius:"50%",background:`${el.color}15`,border:`1px solid ${el.color}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{el.icon}</div>
                           <div style={{flex:1,minWidth:0}}>
-                            <div className="wm-lb-row-addr" style={{fontSize:13,fontWeight:600,color:isMe?"#38bdf8":"#f1f5f9",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                            <div style={{fontSize:13,fontWeight:600,color:isMe?"#38bdf8":"#f1f5f9",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                               {isMe ? "You ("+row.addr.slice(0,6)+"…)" : `${row.addr.slice(0,6)}…${row.addr.slice(-4)}`}
                               {isMe && <span style={{fontSize:10,color:"#0ea5e9",marginLeft:6,fontWeight:700}}>· YOU</span>}
                             </div>
@@ -2832,11 +2848,69 @@ const loadCards = async () => {
             </div>
 
             {/* Admin Tabs */}
-            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12,flexWrap:"wrap"}}>
-              {[["season","🏆 Season"],["settings","⚙️ Settings"],["revenue","💰 Revenue"],["emergency","🚨 Emergency"]].map(([id,label])=>(
-                <button key={id} onClick={()=>{ setAdminTab(id); if(id==="season"||id==="revenue") loadAdminInfo(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:adminTab===id?"rgba(14,165,233,.12)":"transparent",color:adminTab===id?"#38bdf8":"#64748b",fontSize:13,fontWeight:adminTab===id?700:500,cursor:"pointer",fontFamily:F}}>{label}</button>
+            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12,flexWrap:"wrap",overflowX:"auto"}}>
+              {[["season","🏆 Season"],["collections","🌊 Collections"],["settings","⚙️ Settings"],["revenue","💰 Revenue"],["emergency","🚨 Emergency"]].map(([id,label])=>(
+                <button key={id} onClick={()=>{ setAdminTab(id); if(id==="season"||id==="revenue") loadAdminInfo(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:adminTab===id?"rgba(14,165,233,.12)":"transparent",color:adminTab===id?"#38bdf8":"#64748b",fontSize:13,fontWeight:adminTab===id?700:500,cursor:"pointer",fontFamily:F,flexShrink:0,whiteSpace:"nowrap"}}>{label}</button>
               ))}
             </div>
+
+            {/* Collections Tab */}
+            {adminTab==="collections" && (
+              <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>Approved Collections</div>
+                  {collections.map((col,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"12px",borderRadius:10,background:col.active?"rgba(74,222,128,.04)":"rgba(239,68,68,.04)",border:`1px solid ${col.active?"rgba(74,222,128,.15)":"rgba(239,68,68,.15)"}`,marginBottom:8}}>
+                      {col.imageURI && <img src={col.imageURI} alt="" style={{width:36,height:36,borderRadius:8,objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>}
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>{col.name}</div>
+                        <div style={{fontSize:11,color:"#64748b",fontFamily:FM}}>{col.contractAddr.slice(0,10)}…{col.contractAddr.slice(-6)}</div>
+                      </div>
+                      <div style={{fontSize:11,color:col.active?"#4ade80":"#f87171",fontWeight:600}}>{col.active?"Active":"Inactive"}</div>
+                      <button onClick={async()=>{
+                        setAdminLoading(true);
+                        try {
+                          const signer = await provider.getSigner();
+                          const wc = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
+                          const tx = await wc.setCollectionActive(i, !col.active);
+                          await tx.wait();
+                          toast(`${col.name} ${col.active?"deactivated":"activated"} ✓`);
+                          await loadCollections();
+                        } catch(e){ toast("Failed: "+(e.reason||e.message),"err"); }
+                        setAdminLoading(false);
+                      }} disabled={adminLoading} style={{padding:"6px 12px",borderRadius:6,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:11,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>{col.active?"Deactivate":"Activate"}</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>Add New Collection</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    <input id="admin-col-name" placeholder="Collection Name" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:F}}/>
+                    <input id="admin-col-addr" placeholder="0x… NFT Contract Address" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
+                    <input id="admin-col-img" placeholder="/collections/name.png (image path)" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:F}}/>
+                    <button onClick={async()=>{
+                      setAdminLoading(true);
+                      try {
+                        const name = document.getElementById("admin-col-name").value;
+                        const addr_ = document.getElementById("admin-col-addr").value;
+                        const img = document.getElementById("admin-col-img").value;
+                        if(!name||!addr_) { toast("Name and address required","err"); setAdminLoading(false); return; }
+                        const signer = await provider.getSigner();
+                        const wc = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
+                        const tx = await wc.addCollection(addr_, name, img||"");
+                        await tx.wait();
+                        toast(`Collection "${name}" added ✓`);
+                        document.getElementById("admin-col-name").value="";
+                        document.getElementById("admin-col-addr").value="";
+                        document.getElementById("admin-col-img").value="";
+                        await loadCollections();
+                      } catch(e){ toast("Failed: "+(e.reason||e.message),"err"); }
+                      setAdminLoading(false);
+                    }} disabled={adminLoading} style={{padding:"10px 20px",borderRadius:10,background:adminLoading?"#1e293b":"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:adminLoading?"#475569":"#fff",fontSize:13,fontWeight:700,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>{adminLoading?"Adding…":"Add Collection"}</button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Season Tab */}
             {adminTab==="season" && (
