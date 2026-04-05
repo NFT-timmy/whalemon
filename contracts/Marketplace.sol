@@ -101,6 +101,9 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     /// @notice Global market statistics
     MarketStats public marketStats;
 
+    /// @notice Blacklisted addresses — blocked from all marketplace activity
+    mapping(address => bool) public blacklisted;
+
     /* ═══════════════════════════════════════════════════ */
     /*                     EVENTS                         */
     /* ═══════════════════════════════════════════════════ */
@@ -113,6 +116,7 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     event OfferAccepted(uint256 indexed offerId, uint256 indexed cardId, address seller, address buyer, uint256 amount);
     event OfferCancelled(uint256 indexed offerId);
     event FeesWithdrawn(address indexed to, uint256 amount);
+    event Blacklisted(address indexed account, bool status);
 
     /* ═══════════════════════════════════════════════════ */
     /*                   CUSTOM ERRORS                    */
@@ -131,6 +135,7 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     error CardNotApproved();
     error InvalidFee();
     error NoFeesToWithdraw();
+    error AccountBlacklisted();
 
     /* ═══════════════════════════════════════════════════ */
     /*                   CONSTRUCTOR                      */
@@ -152,6 +157,7 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     /// @param cardId The card token ID to list
     /// @param price Asking price in PATHUSD (18 decimals)
     function listCard(uint256 cardId, uint256 price) external nonReentrant returns (uint256) {
+        if (blacklisted[msg.sender]) revert AccountBlacklisted();
         if (whaleCards.ownerOf(cardId) != msg.sender) revert NotCardOwner();
         if (cardToListing[cardId] != 0 && listings[cardToListing[cardId]].status == ListingStatus.Active) revert CardAlreadyListed();
         if (price < MIN_PRICE) revert PriceTooLow();
@@ -184,6 +190,7 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     /// @notice Buy a listed card using PATHUSD
     /// @param listingId The listing to purchase
     function buyCard(uint256 listingId) external nonReentrant {
+        if (blacklisted[msg.sender]) revert AccountBlacklisted();
         Listing storage listing = listings[listingId];
         if (listing.status != ListingStatus.Active) revert ListingNotActive();
         if (listing.seller == msg.sender) revert CannotBuyOwnCard();
@@ -259,6 +266,7 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     /// @param amount Offer amount in PATHUSD
     /// @param duration How long the offer is valid (in seconds)
     function makeOffer(uint256 cardId, uint256 amount, uint256 duration) external nonReentrant returns (uint256) {
+        if (blacklisted[msg.sender]) revert AccountBlacklisted();
         if (amount < MIN_PRICE) revert PriceTooLow();
         if (whaleCards.ownerOf(cardId) == msg.sender) revert CannotBuyOwnCard();
 
@@ -287,6 +295,7 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     /// @notice Accept an offer on your card
     /// @param offerId The offer to accept
     function acceptOffer(uint256 offerId) external nonReentrant {
+        if (blacklisted[msg.sender]) revert AccountBlacklisted();
         Offer storage offer = offers[offerId];
         if (offer.accepted || offer.cancelled) revert OfferNotActive();
         if (block.timestamp > offer.expiresAt) revert OfferExpired();
@@ -437,6 +446,12 @@ contract WhalemonMarket is Ownable, ReentrancyGuard {
     function setPlatformFee(uint256 _feeBps) external onlyOwner {
         if (_feeBps > MAX_FEE_BPS) revert InvalidFee();
         platformFeeBps = _feeBps;
+    }
+
+    /// @notice Blacklist or unblacklist an address from marketplace activity
+    function setBlacklist(address account, bool status) external onlyOwner {
+        blacklisted[account] = status;
+        emit Blacklisted(account, status);
     }
 
     /// @notice Withdraw accumulated platform fees

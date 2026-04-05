@@ -7,9 +7,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/// @title WhaleCards - Whalemon TCG (Multi-Collection + Crafting)
+/// @title WhaleCards - Whalemon TCG (Multi-Collection + Crafting + Blacklist)
 /// @author Whalemon TCG on Tempo Network
-/// @notice Mint Whalemon cards from approved NFT collections. Craft cards to upgrade rarity.
 /// @dev SVG rendering delegated to WhalemonRenderer to stay under contract size limit.
 
 interface IERC721Source {
@@ -34,8 +33,6 @@ interface IWhalemonRenderer {
 contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
     using Strings for uint256;
 
-    /* ========== STRUCTS ========== */
-
     struct Collection {
         address contractAddr;
         string name;
@@ -45,40 +42,26 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
     }
 
     struct CardStats {
-        uint16 attack;
-        uint16 defense;
-        uint16 health;
-        uint16 speed;
-        uint8 element;
-        uint8 rarity;
-        bytes32 abilityHash;
-        bool isSet;
+        uint16 attack; uint16 defense; uint16 health; uint16 speed;
+        uint8 element; uint8 rarity; bytes32 abilityHash; bool isSet;
     }
 
     struct CardOrigin {
-        address sourceContract;
-        uint256 sourceTokenId;
-        bool isCrafted;
+        address sourceContract; uint256 sourceTokenId; bool isCrafted;
     }
 
     struct CraftTier {
-        uint8 inputRarity;
-        uint8 outputRarity;
-        uint8 inputCount;
-        uint256 cost;
-        uint8 successRate;
+        uint8 inputRarity; uint8 outputRarity; uint8 inputCount; uint256 cost; uint8 successRate;
     }
 
     /* ========== STATE ========== */
 
     IPATHUSD public immutable pathUSD;
     IWhalemonRenderer public renderer;
-
     uint256 public nextCardId = 1;
 
     mapping(uint256 => Collection) public collections;
     uint256 public collectionCount;
-
     mapping(bytes32 => bool) public cardMinted;
     mapping(uint256 => CardStats) public cardStats;
     mapping(uint256 => CardOrigin) public cardOrigins;
@@ -87,11 +70,15 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
     address public oracle;
     string public baseMetadataURI;
     address public prizePoolTarget;
-
     uint256 public craftingPlatformFees;
     uint256 public craftingPrizePoolFees;
-
     CraftTier[4] public craftTiers;
+
+    /// @notice Crafting fee split: basis points going to prize pool (default 5000 = 50%)
+    uint256 public craftPoolSplitBps = 5000;
+
+    /// @notice Blacklisted addresses — blocked from minting, crafting, and transferring
+    mapping(address => bool) public blacklisted;
 
     /* ========== EVENTS ========== */
 
@@ -102,6 +89,8 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
     event CardCrafted(address indexed owner, uint256 indexed newCardId, uint8 outputRarity, bool success);
     event CraftingFeesWithdrawn(address indexed to, uint256 platformAmount, uint256 prizePoolAmount);
+    event Blacklisted(address indexed account, bool status);
+    event CraftPoolSplitUpdated(uint256 oldBps, uint256 newBps);
 
     /* ========== ERRORS ========== */
 
@@ -120,18 +109,24 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
     error CraftInputDifferentCollection();
     error InsufficientAllowance();
     error NothingToWithdraw();
+    error AccountBlacklisted();
+    error InvalidSplit();
+
+    /* ========== MODIFIERS ========== */
+
+    modifier notBlacklisted(address account) {
+        if (blacklisted[account]) revert AccountBlacklisted();
+        _;
+    }
 
     /* ========== CONSTRUCTOR ========== */
 
     constructor(
-        address _pathUSD,
-        address _oracle,
-        address _renderer
+        address _pathUSD, address _oracle, address _renderer
     ) ERC721("Whalemon", "WMON") Ownable(msg.sender) {
         pathUSD = IPATHUSD(_pathUSD);
         oracle = _oracle;
         renderer = IWhalemonRenderer(_renderer);
-
         craftTiers[0] = CraftTier(0, 1, 3, 2 ether, 100);
         craftTiers[1] = CraftTier(1, 2, 3, 5 ether, 85);
         craftTiers[2] = CraftTier(2, 3, 4, 15 ether, 60);
@@ -174,32 +169,28 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
 
     /* ========== MINTING ========== */
 
-    function mintCard(uint256 collectionId, uint256 sourceTokenId) external returns (uint256) {
+    function mintCard(uint256 collectionId, uint256 sourceTokenId) external notBlacklisted(msg.sender) returns (uint256) {
         if (collectionId >= collectionCount) revert CollectionNotFound();
         Collection storage col = collections[collectionId];
         if (!col.active) revert CollectionNotActive();
         if (IERC721Source(col.contractAddr).ownerOf(sourceTokenId) != msg.sender) revert NotNFTOwner();
-
         bytes32 mk = keccak256(abi.encodePacked(col.contractAddr, sourceTokenId));
         if (cardMinted[mk]) revert CardAlreadyMinted();
         cardMinted[mk] = true;
-
         uint256 cardId = nextCardId++;
         cardOrigins[cardId] = CardOrigin(col.contractAddr, sourceTokenId, false);
         col.totalMinted++;
         _safeMint(msg.sender, cardId);
-
         emit CardMinted(msg.sender, cardId, col.contractAddr, sourceTokenId);
         return cardId;
     }
 
-    function batchMintCards(uint256 collectionId, uint256[] calldata sourceTokenIds) external returns (uint256[] memory) {
+    function batchMintCards(uint256 collectionId, uint256[] calldata sourceTokenIds) external notBlacklisted(msg.sender) returns (uint256[] memory) {
         if (collectionId >= collectionCount) revert CollectionNotFound();
         Collection storage col = collections[collectionId];
         if (!col.active) revert CollectionNotActive();
         IERC721Source src = IERC721Source(col.contractAddr);
         uint256[] memory ids = new uint256[](sourceTokenIds.length);
-
         for (uint256 i = 0; i < sourceTokenIds.length; i++) {
             if (src.ownerOf(sourceTokenIds[i]) != msg.sender) revert NotNFTOwner();
             bytes32 mk = keccak256(abi.encodePacked(col.contractAddr, sourceTokenIds[i]));
@@ -217,14 +208,12 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
 
     /* ========== CRAFTING ========== */
 
-    function craftCards(uint256[] calldata inputCardIds) external nonReentrant returns (uint256) {
+    function craftCards(uint256[] calldata inputCardIds) external nonReentrant notBlacklisted(msg.sender) returns (uint256) {
         if (inputCardIds.length < 3) revert InvalidCraftInput();
-
         uint8 inputRarity = cardStats[inputCardIds[0]].rarity;
         if (inputRarity > 3) revert InvalidCraftInput();
         CraftTier memory tier = craftTiers[inputRarity];
         if (inputCardIds.length != tier.inputCount) revert InvalidCraftInput();
-
         address srcContract = cardOrigins[inputCardIds[0]].sourceContract;
 
         uint256 bestAtk; uint256 bestDef; uint256 bestHp; uint256 bestSpd;
@@ -238,21 +227,22 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
             if (!s.isSet) revert CraftInputStatsNotSet();
             if (s.rarity != inputRarity) revert CraftInputWrongRarity();
             if (cardOrigins[cid].sourceContract != srcContract) revert CraftInputDifferentCollection();
-
             if (s.attack > uint16(bestAtk)) bestAtk = s.attack;
             if (s.defense > uint16(bestDef)) bestDef = s.defense;
             if (s.health > uint16(bestHp)) bestHp = s.health;
             if (s.speed > uint16(bestSpd)) bestSpd = s.speed;
-
             uint256 t = uint256(s.attack) + uint256(s.defense) + uint256(s.health) + uint256(s.speed);
             if (t > bestTotal) { bestTotal = t; bestIdx = i; bestElement = s.element; bestImage = cardImageURI[cid]; }
         }
 
         if (pathUSD.allowance(msg.sender, address(this)) < tier.cost) revert InsufficientAllowance();
         pathUSD.transferFrom(msg.sender, address(this), tier.cost);
-        uint256 half = tier.cost / 2;
-        craftingPrizePoolFees += half;
-        craftingPlatformFees += (tier.cost - half);
+
+        // Split fee using adjustable ratio
+        uint256 poolShare = (tier.cost * craftPoolSplitBps) / 10000;
+        uint256 platformShare = tier.cost - poolShare;
+        craftingPrizePoolFees += poolShare;
+        craftingPlatformFees += platformShare;
 
         uint256 seed = uint256(keccak256(abi.encodePacked(
             block.prevrandao, block.timestamp, msg.sender, nextCardId, inputCardIds.length
@@ -261,24 +251,17 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
 
         if (success) {
             for (uint256 i = 0; i < inputCardIds.length; i++) _burn(inputCardIds[i]);
-
             uint256 newId = nextCardId++;
             uint256 bs = uint256(keccak256(abi.encodePacked(seed, "boost")));
-
             cardStats[newId] = CardStats({
-                attack: _boost(uint16(bestAtk), bs, 0),
-                defense: _boost(uint16(bestDef), bs, 1),
-                health: _boostHp(uint16(bestHp), bs, 2),
-                speed: _boost(uint16(bestSpd), bs, 3),
-                element: bestElement,
-                rarity: tier.outputRarity,
-                abilityHash: keccak256(abi.encodePacked("crafted", newId)),
-                isSet: true
+                attack: _boost(uint16(bestAtk), bs, 0), defense: _boost(uint16(bestDef), bs, 1),
+                health: _boostHp(uint16(bestHp), bs, 2), speed: _boost(uint16(bestSpd), bs, 3),
+                element: bestElement, rarity: tier.outputRarity,
+                abilityHash: keccak256(abi.encodePacked("crafted", newId)), isSet: true
             });
             cardOrigins[newId] = CardOrigin(srcContract, 0, true);
             if (bytes(bestImage).length > 0) cardImageURI[newId] = bestImage;
             _safeMint(msg.sender, newId);
-
             emit CardCrafted(msg.sender, newId, tier.outputRarity, true);
             return newId;
         } else {
@@ -314,7 +297,6 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
         if (attack == 0 || attack > 100 || defense == 0 || defense > 100) revert InvalidStats();
         if (health < 50 || health > 300 || speed == 0 || speed > 100) revert InvalidStats();
         if (element > 5 || rarity > 4) revert InvalidStats();
-
         cardStats[cardId] = CardStats(attack, defense, health, speed, element, rarity, abilityHash, true);
         if (bytes(imageURI).length > 0) cardImageURI[cardId] = imageURI;
         emit StatsCommitted(cardId, element, rarity);
@@ -337,9 +319,7 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
 
     /* ========== VIEWS ========== */
 
-    function getCardStats(uint256 cardId) external view returns (
-        uint16, uint16, uint16, uint16, uint8, uint8, bytes32, bool
-    ) {
+    function getCardStats(uint256 cardId) external view returns (uint16, uint16, uint16, uint16, uint8, uint8, bytes32, bool) {
         if (!_exists(cardId)) revert CardDoesNotExist();
         CardStats memory s = cardStats[cardId];
         return (s.attack, s.defense, s.health, s.speed, s.element, s.rarity, s.abilityHash, s.isSet);
@@ -402,6 +382,20 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
         craftTiers[tierIndex].successRate = successRate;
     }
 
+    /// @notice Set the crafting fee split ratio (basis points to prize pool, remainder to platform)
+    /// @param _bps Basis points for prize pool (0-10000, e.g. 5000 = 50%)
+    function setCraftPoolSplit(uint256 _bps) external onlyOwner {
+        if (_bps > 10000) revert InvalidSplit();
+        emit CraftPoolSplitUpdated(craftPoolSplitBps, _bps);
+        craftPoolSplitBps = _bps;
+    }
+
+    /// @notice Blacklist or unblacklist an address
+    function setBlacklist(address account, bool status) external onlyOwner {
+        blacklisted[account] = status;
+        emit Blacklisted(account, status);
+    }
+
     function withdrawCraftingFees(address platformTo) external onlyOwner {
         uint256 pAmt = craftingPlatformFees;
         uint256 poolAmt = craftingPrizePoolFees;
@@ -416,9 +410,15 @@ contract WhaleCards is ERC721, ERC721Enumerable, Ownable, ReentrancyGuard {
 
     /* ========== OVERRIDES ========== */
 
+    /// @dev Blocks transfers to/from blacklisted addresses
     function _update(address to, uint256 tokenId, address auth)
         internal override(ERC721, ERC721Enumerable) returns (address)
-    { return super._update(to, tokenId, auth); }
+    {
+        address from = _ownerOf(tokenId);
+        if (from != address(0) && blacklisted[from]) revert AccountBlacklisted();
+        if (to != address(0) && blacklisted[to]) revert AccountBlacklisted();
+        return super._update(to, tokenId, auth);
+    }
 
     function _increaseBalance(address account, uint128 value)
         internal override(ERC721, ERC721Enumerable)

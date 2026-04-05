@@ -170,6 +170,9 @@ contract BattleArena is Ownable, ReentrancyGuard {
 
     uint256 public totalBattlesPlayed;
 
+    /// @notice Blacklisted addresses — blocked from creating/joining battles
+    mapping(address => bool) public blacklisted;
+
     /* ═══════════════════════════════════════════════════ */
     /*                     EVENTS                         */
     /* ═══════════════════════════════════════════════════ */
@@ -194,6 +197,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
     event PlayerRanked(uint256 indexed season, uint256 indexed rank, address indexed player);
     event BattleDraw(uint256 indexed battleId, address indexed player1, address indexed player2, uint256 refundEach);
     event MultiplierFeeUpdated(uint256 oldFee, uint256 newFee);
+    event Blacklisted(address indexed account, bool status);
 
     /* ═══════════════════════════════════════════════════ */
     /*                   CUSTOM ERRORS                    */
@@ -230,6 +234,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
     error DuplicateRankedPlayer();
     error TooManyRewardedPlayers();
     error InvalidMultiplier();
+    error AccountBlacklisted();
 
     /* ═══════════════════════════════════════════════════ */
     /*                   CONSTRUCTOR                      */
@@ -292,6 +297,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
     /* ═══════════════════════════════════════════════════ */
 
     function createBattle(uint256 cardId, uint32 multiplier) external nonReentrant returns (uint256) {
+        if (blacklisted[msg.sender]) revert AccountBlacklisted();
         _validateCard(msg.sender, cardId);
         if (activeBattle[msg.sender] != 0) revert AlreadyInBattle();
         if (multiplier == 0 || multiplier > MAX_MULTIPLIER) revert InvalidMultiplier();
@@ -313,6 +319,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
     }
 
     function createAIBattle(uint256 cardId, uint32 multiplier) external nonReentrant returns (uint256) {
+        if (blacklisted[msg.sender]) revert AccountBlacklisted();
         _validateCard(msg.sender, cardId);
         if (activeBattle[msg.sender] != 0) revert AlreadyInBattle();
         if (multiplier == 0 || multiplier > MAX_MULTIPLIER) revert InvalidMultiplier();
@@ -339,6 +346,7 @@ contract BattleArena is Ownable, ReentrancyGuard {
     }
 
     function joinBattle(uint256 battleId, uint256 cardId) external nonReentrant {
+        if (blacklisted[msg.sender]) revert AccountBlacklisted();
         Battle storage battle = battles[battleId];
         if (battle.status != BattleStatus.Open)        revert BattleNotOpen();
         if (battle.player1 == msg.sender)              revert CannotFightYourself();
@@ -885,6 +893,12 @@ contract BattleArena is Ownable, ReentrancyGuard {
     function setClaimWindow(uint256 _window) external onlyOwner {
         emit ClaimWindowUpdated(claimWindow, _window);
         claimWindow = _window;
+    }
+
+    /// @notice Blacklist or unblacklist an address from battling
+    function setBlacklist(address account, bool status) external onlyOwner {
+        blacklisted[account] = status;
+        emit Blacklisted(account, status);
     }
 
     /// @notice Withdraw accumulated platform fees to any address.
