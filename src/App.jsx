@@ -652,7 +652,6 @@ const loadCollections = async () => {
         const prov   = await ensureTempo();
         const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
 
-        // Load approved collections from contract
         let cols = [];
         try {
           cols = await wCards.getCollections();
@@ -664,13 +663,11 @@ const loadCollections = async () => {
             active: c.active,
             totalMinted: Number(c.totalMinted),
           }));
-          console.log("[collections] loaded", cols.length, "collections:", cols.map(c=>c.name));
-        } catch(e){ console.error("[collections] getCollections failed:",e); }
+        } catch(e){ console.warn("getCollections",e); }
         setCollections(cols);
 
-        if(!connected || !addr) { console.log("[collections] not connected, skipping NFT load"); setLoadingW(false); return; }
+        if(!connected || !addr) { setLoadingW(false); return; }
 
-        // Load NFTs for each active collection the player holds
         const allNfts = {};
         const allMinted = new Set();
         const allWhaleList = [];
@@ -679,44 +676,32 @@ const loadCollections = async () => {
         try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
 
         for(const col of cols.filter(c=>c.active)) {
-          console.log(`[collections] loading ${col.name} (${col.contractAddr})...`);
           const src = new Contract(col.contractAddr, SOURCE_NFT_ABI, prov);
           let bal = 0;
-          try { bal = Number(await src.balanceOf(addr)); } catch(e){ console.warn(`[collections] balanceOf failed for ${col.name}:`,e); }
-          console.log(`[collections] ${col.name}: balance = ${bal}`);
+          try { bal = Number(await src.balanceOf(addr)); } catch(_){}
           if(bal === 0) { allNfts[col.id] = []; continue; }
 
-          // Use tokenOfOwnerByIndex if available, fallback to scan
           const ids = [];
-          let usedEnum = false;
           try {
             for(let i=0; i<bal; i++){
               const tid = Number(await src.tokenOfOwnerByIndex(addr, i));
               ids.push(tid);
               await new Promise(r=>setTimeout(r,80));
             }
-            usedEnum = true;
-            console.log(`[collections] ${col.name}: enumerated ${ids.length} tokens via tokenOfOwnerByIndex`);
-          } catch(enumErr){
-            console.log(`[collections] ${col.name}: tokenOfOwnerByIndex not available, falling back to ownerOf scan...`, enumErr.message?.slice(0,80));
-            // Fallback: scan token IDs
+          } catch(_){
             const batchSize = 5;
-            const maxScan = 10000;
-            for(let start=0; start<maxScan && ids.length<bal; start+=batchSize){
+            for(let start=0; start<10000 && ids.length<bal; start+=batchSize){
               const checks = [];
-              for(let j=start; j<Math.min(start+batchSize,maxScan); j++){
+              for(let j=start; j<Math.min(start+batchSize,10000); j++){
                 checks.push(src.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null));
               }
               const results = await Promise.all(checks);
               for(const r of results) if(r!==null) ids.push(r);
-              if(start % 100 === 0) console.log(`[collections] ${col.name}: scanned ${Math.min(start+batchSize,maxScan)}/${maxScan}, found ${ids.length}/${bal}`);
               if(ids.length>=bal) break;
               await new Promise(r=>setTimeout(r,150));
             }
-            console.log(`[collections] ${col.name}: scan complete, found ${ids.length} tokens`);
           }
 
-          // Load images and minted status
           const nftList = [];
           for(const id of ids){
             const cacheId = `${col.contractAddr}_${id}`;
@@ -736,11 +721,11 @@ const loadCollections = async () => {
                   if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
                 }
                 imgCache[cacheId] = img;
-              } catch(e){ console.warn("[collections] tokenURI failed for",col.name,"#"+id,e); }
+              } catch(_){}
               await new Promise(r=>setTimeout(r,100));
             }
             let minted_ = false;
-            try{ minted_ = await wCards.isCardMinted(col.contractAddr, id); }catch(e){ console.warn("[collections] isCardMinted failed",col.name,"#"+id,e); }
+            try{ minted_ = await wCards.isCardMinted(col.contractAddr, id); }catch(_){}
             if(minted_) allMinted.add(`${col.contractAddr}_${id}`);
             const nft = {id, image:img, collectionId:col.id, sourceContract:col.contractAddr};
             nftList.push(nft);
@@ -748,13 +733,11 @@ const loadCollections = async () => {
             await new Promise(r=>setTimeout(r,80));
           }
           allNfts[col.id] = nftList;
-          console.log(`[collections] ${col.name}: loaded ${nftList.length} NFTs, ${[...allMinted].filter(k=>k.startsWith(col.contractAddr)).length} already minted`);
         }
         try { localStorage.setItem(imgCacheKey, JSON.stringify(imgCache)); } catch(_){}
         setColNfts(allNfts);
         setWhales(allWhaleList);
         setMintedIds(allMinted);
-        console.log("[collections] done. Total NFTs:", allWhaleList.length, "Minted:", allMinted.size);
       } catch(e){ console.error("loadCollections",e); toast("Could not load collections","err"); }
       setLoadingW(false);
     };
