@@ -143,7 +143,30 @@ const RARITY_COLORS = ["#94a3b8","#22c55e","#3b82f6","#a855f7","#f59e0b"];
 
 // ── tiny helpers ──────────────────────────────────────────────────────────────
 const el = (i) => ELEMENTS[i] ?? ELEMENTS[0];
-const nftImg = (id) => `https://placehold.co/400x400/0c4a6e/38bdf8?text=WHEL+%23${id}`;
+const nftImg = (id) => `https://placehold.co/400x400/0c4a6e/38bdf8?text=NFT+%23${id}`;
+
+// IPFS gateway fallback — tries multiple gateways
+const IPFS_GATEWAYS = ["https://ipfs.io/ipfs/","https://dweb.link/ipfs/","https://cf-ipfs.com/ipfs/","https://nftstorage.link/ipfs/"];
+const ipfsToHttp = (uri) => {
+  if(!uri) return uri;
+  if(uri.startsWith("ipfs://")) return IPFS_GATEWAYS[0] + uri.slice(7);
+  return uri;
+};
+const fetchIpfsJson = async (uri) => {
+  const hash = uri.startsWith("ipfs://") ? uri.slice(7) : uri.replace(/^https?:\/\/[^/]+\/ipfs\//, "");
+  for(const gw of IPFS_GATEWAYS) {
+    try {
+      const resp = await fetch(gw + hash, {signal: AbortSignal.timeout(8000)});
+      if(resp.ok) return await resp.json();
+    } catch(_){}
+  }
+  return null;
+};
+const resolveIpfsImage = (img) => {
+  if(!img) return img;
+  if(img.startsWith("ipfs://")) return IPFS_GATEWAYS[0] + img.slice(7);
+  return img;
+};
 
 function StatBar({ label, value, max, color }) {
   return (
@@ -713,12 +736,10 @@ const loadCollections = async () => {
                   const json = uri.startsWith("data:application/json;base64,")
                     ? JSON.parse(atob(uri.split(",")[1]))
                     : JSON.parse(decodeURIComponent(uri.split(",")[1]));
-                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+                  if(json.image) img = resolveIpfsImage(json.image);
                 } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
-                  const fetchUrl = uri.startsWith("ipfs://") ? uri.replace("ipfs://","https://ipfs.io/ipfs/") : uri;
-                  const resp = await fetch(fetchUrl);
-                  const json = await resp.json();
-                  if(json.image) img = json.image.startsWith("ipfs://") ? json.image.replace("ipfs://","https://ipfs.io/ipfs/") : json.image;
+                  const json = await fetchIpfsJson(uri);
+                  if(json && json.image) img = resolveIpfsImage(json.image);
                 }
                 imgCache[cacheId] = img;
               } catch(_){}
@@ -1658,8 +1679,9 @@ const loadCards = async () => {
       .wm-header { padding:6px 8px !important; }
       .wm-header-logo { font-size:14px !important; }
       .wm-header-right { gap:4px !important; }
-      .wm-header-bal { display:none !important; }
-      .wm-header-addr { max-width:68px !important; font-size:9px !important; padding:3px 6px !important; }
+      .wm-header-tempo { display:none !important; }
+      .wm-header-bal { font-size:11px !important; padding:3px 8px !important; }
+      .wm-header-addr { display:none !important; }
       .wm-header-dc { font-size:10px !important; padding:3px 6px !important; }
       .wm-nav { padding:4px 8px !important; }
       .wm-nav-btn { padding:6px 8px !important; font-size:11px !important; }
@@ -1884,7 +1906,7 @@ const loadCards = async () => {
         </div>
         <div className="wm-header-right" style={{display:"flex",alignItems:"center",gap:10}}>
           {connected ? <>
-            <div style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:20,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",fontSize:13,color:"#38bdf8",flexShrink:0}}>
+            <div className="wm-header-tempo" style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:20,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",fontSize:13,color:"#38bdf8",flexShrink:0}}>
               <div style={{width:6,height:6,borderRadius:"50%",background:"#4ade80"}}/>Tempo
             </div>
             <div className="wm-header-bal" style={{padding:"5px 12px",borderRadius:20,background:"rgba(74,222,128,.08)",border:"1px solid rgba(74,222,128,.2)",fontSize:14,color:"#4ade80",fontWeight:700,fontFamily:FM,flexShrink:0}}>${balance}</div>
@@ -1946,14 +1968,25 @@ const loadCards = async () => {
               <div style={{fontSize:15}}>Loading your NFTs…</div>
             </div>}
 
-            {!loadingW && (!connected || (colNfts[activeCol]||[]).length===0) && (
+            {!loadingW && (!connected || (colNfts[activeCol]||[]).length===0) && (()=>{
+              const colLinks = {
+                "0x3e12fcb20ad532f653f2907d2ae511364e2ae696": {emoji:"🐋",text:"Whale Up from Whelmart",url:"https://stablewhel.xyz/collection/4217/0x3e12fcb20ad532f653f2907d2ae511364e2ae696"},
+                "0x1ee82cc5946edbd88eaf90d6d3c2b5baa4f9966c": {emoji:"😺",text:"Adopt a Nyaw on Tempo",url:"https://stablewhel.xyz/collection/4217/0x1Ee82CC5946EdBD88eaf90D6d3c2B5baA4f9966C"},
+                "0x0e3d1e74a49ba5b3f5c1e746d2bcaab2dee8c62b": {emoji:"🐱",text:"Grab a Citcat before they're gone",url:"https://stablewhel.xyz/collection/4217/0x0E3D1e74A49ba5b3F5c1E746d2bcaaB2dee8C62B"},
+              };
+              const col = collections[activeCol];
+              const link = col ? colLinks[col.contractAddr.toLowerCase()] : null;
+              return (
               <div style={{textAlign:"center",padding:80,color:"#334155"}}>
-                <div style={{fontSize:48,marginBottom:16}}>🌊</div>
-                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>{connected ? `No ${collections[activeCol]?.name||"NFTs"} in your wallet` : "Connect your wallet to view your NFTs"}</div>
-                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? "You need NFTs from an approved collection to generate Whalemon cards." : "Or browse the app in explore mode."}</div>
-                {connected && <button onClick={loadCollections} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>}
+                <div style={{fontSize:48,marginBottom:16}}>{link?.emoji||"🌊"}</div>
+                <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>{connected ? `No ${col?.name||"NFTs"} in your wallet` : "Connect your wallet to view your NFTs"}</div>
+                <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? `You need ${col?.name||"NFTs"} to generate Whalemon cards from this collection.` : "Or browse the app in explore mode."}</div>
+                <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+                  {connected && <button onClick={loadCollections} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>}
+                  {link && <a href={link.url} target="_blank" rel="noopener noreferrer" style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F,textDecoration:"none",display:"inline-block"}}>{link.emoji} {link.text} →</a>}
+                </div>
               </div>
-            )}
+            );})()}
 
             <div className="card-grid">
               {(colNfts[activeCol]||[]).map(w=>{
@@ -2192,7 +2225,37 @@ const loadCards = async () => {
               <div style={{textAlign:"center",paddingTop:40}}>
                 <div style={{fontSize:56,marginBottom:20}}>⚔️</div>
                 <h2 style={{fontSize:26,fontWeight:700,color:"#f1f5f9",marginBottom:10}}>Battle Arena</h2>
-                <p style={{fontSize:15,color:"#64748b",maxWidth:400,margin:"0 auto 24px"}}>Ranked matches start at 1 PATHUSD. Use a multiplier to boost your stakes and win credits.</p>
+                <p style={{fontSize:15,color:"#64748b",maxWidth:400,margin:"0 auto 16px"}}>Ranked matches start at 1 PATHUSD. Use a multiplier to boost your stakes and win credits.</p>
+                {/* Live PvP activity indicator */}
+                {(()=>{
+                  const [openCount, setOpenCount] = useState(null);
+                  useEffect(()=>{
+                    let cancelled = false;
+                    (async()=>{
+                      try {
+                        const prov = await ensureTempo();
+                        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+                        const open = await arena.getOpenBattles(0, 50);
+                        if(!cancelled) setOpenCount(open.length);
+                      } catch(_){}
+                    })();
+                    const iv = setInterval(async()=>{
+                      try {
+                        const prov = await ensureTempo();
+                        const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
+                        const open = await arena.getOpenBattles(0, 50);
+                        if(!cancelled) setOpenCount(open.length);
+                      } catch(_){}
+                    }, 15000);
+                    return ()=>{ cancelled=true; clearInterval(iv); };
+                  },[]);
+                  return openCount !== null ? (
+                    <div style={{display:"inline-flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:20,background:openCount>0?"rgba(74,222,128,.08)":"rgba(255,255,255,.04)",border:`1px solid ${openCount>0?"rgba(74,222,128,.2)":"rgba(255,255,255,.08)"}`,fontSize:13,color:openCount>0?"#4ade80":"#475569",marginBottom:24}}>
+                      <div style={{width:6,height:6,borderRadius:"50%",background:openCount>0?"#4ade80":"#475569",animation:openCount>0?"pulse 2s ease-in-out infinite":"none"}}/>
+                      {openCount > 0 ? `${openCount} open PvP ${openCount===1?"battle":"battles"} waiting` : "No open PvP battles — start one!"}
+                    </div>
+                  ) : null;
+                })()}
 
                 {/* Multiplier selector */}
                 <div style={{maxWidth:420,margin:"0 auto 28px",padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
