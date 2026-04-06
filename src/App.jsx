@@ -663,7 +663,7 @@ const pvpPollRef                         = useRef(null);
   useEffect(()=>{
     if(connected && addr && provider){ loadBalance(); loadCollections(); loadCards(); }
     else if(!connected){ loadCollections(); } // load collections even in explore mode
-    if(page==="market") loadMarketplace();
+    if(page==="market") { loadMarketplace(); loadActivities(); }
     if(page==="leaderboard"){ loadLeaderboard(); if(connected && addr) loadClaims(); }
     if(page==="admin" && isOwner) loadAdminInfo();
   },[connected,addr]);
@@ -1138,7 +1138,7 @@ const loadMarketplace = async () => {
         "event OfferAccepted(uint256 indexed offerId, uint256 indexed cardId, address seller, address buyer, uint256 amount)",
       ], prov);
       const block = await prov.getBlockNumber();
-      const from  = Math.max(0, block - 10000);
+      const from  = Math.max(0, block - 50000);
       const [listed, sold, cancelled, offerSold] = await Promise.all([
         mkt.queryFilter(mkt.filters.CardListed(), from),
         mkt.queryFilter(mkt.filters.CardSold(), from),
@@ -1151,6 +1151,13 @@ const loadMarketplace = async () => {
         ...cancelled.map(e=>({ type:"DELIST", cardId:Number(e.args.cardId), price:null, from:"Marketplace", to:null, tx:e.transactionHash, block:e.blockNumber })),
         ...offerSold.map(e=>({ type:"OFFER_SALE", cardId:Number(e.args.cardId), price:fromMkt(e.args.amount), from:e.args.seller, to:e.args.buyer, tx:e.transactionHash, block:e.blockNumber })),
       ].sort((a,b)=>b.block-a.block).slice(0,50);
+      // Fetch actual block timestamps for accurate time display
+      const uniqueBlocks = [...new Set(acts.map(a=>a.block))];
+      const blockTs = {};
+      for(const bn of uniqueBlocks.slice(0,30)) {
+        try { const b = await prov.getBlock(bn); if(b) blockTs[bn] = Number(b.timestamp); } catch(_){}
+      }
+      for(const a of acts) a.timestamp = blockTs[a.block] || 0;
       setActivities(acts);
     } catch(e){ console.error("loadActivities", e); }
   };
@@ -1939,7 +1946,8 @@ const loadCards = async () => {
       {/* header */}
       <header className="wm-header" style={{position:"sticky",top:0,zIndex:100,background:"rgba(2,8,23,.85)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,.05)",padding:"0 24px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div onClick={()=>navigate("collections")} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",flexShrink:0}}>
-          <span style={{fontSize:22}}>🐋</span>
+          <img src="/Whalemon_profile_pic.png" alt="Whalemon" style={{width:28,height:28,borderRadius:6}} onError={e=>{e.target.style.display="none";e.target.nextSibling.style.display="inline";}}/>
+          <span style={{display:"none",fontSize:22}}>🐋</span>
           <span className="wm-header-logo" style={{fontSize:16,fontWeight:800,color:"#f1f5f9",letterSpacing:-.3}}>WHALEMON</span>
           <span style={{fontSize:11,color:"#0ea5e9",letterSpacing:2,fontFamily:FM}}>TCG</span>
         </div>
@@ -2695,12 +2703,15 @@ const loadCards = async () => {
                           OFFER_SALE: {label:"OFFER",    bg:"rgba(168,85,247,.12)",  color:"#a855f7",  border:"rgba(168,85,247,.25)"},
                         }[a.type]||{label:a.type,bg:"#1e293b",color:"#94a3b8",border:"#1e293b"};
                         const card = cards.find(c=>c.id===a.cardId);
-                        const timeAgo = (block) => {
-                          const secs = Math.max(0, Date.now()/1000 - block*2);
-                          if(secs < 60) return `${Math.floor(secs)}s ago`;
+                        const timeAgo = (ts) => {
+                          if(!ts) return "—";
+                          const secs = Math.max(0, Math.floor(Date.now()/1000 - ts));
+                          if(secs < 60) return `${secs}s ago`;
                           if(secs < 3600) return `${Math.floor(secs/60)}m ago`;
                           if(secs < 86400) return `${Math.floor(secs/3600)}h ago`;
-                          return `${Math.floor(secs/86400)}d ago`;
+                          if(secs < 2592000) return `${Math.floor(secs/86400)}d ago`;
+                          if(secs < 31536000) return `${Math.floor(secs/2592000)}mo ago`;
+                          return `${Math.floor(secs/31536000)}y ago`;
                         };
                         return (
                           <div key={i} style={{display:"grid",gridTemplateColumns:"90px 1fr 100px 120px 120px 90px 100px",padding:"10px 16px",borderBottom:"1px solid #0a0e27",alignItems:"center",transition:"background .15s"}}
@@ -2721,7 +2732,7 @@ const loadCards = async () => {
                             <span style={{fontSize:13,fontWeight:700,color:cfg.color,fontFamily:"'JetBrains Mono',monospace"}}>{a.price ? `$${a.price}` : "—"}</span>
                             <span style={{fontSize:12,color:"#64748b",fontFamily:"'JetBrains Mono',monospace"}}>{a.from ? `${a.from.slice(0,6)}…${a.from.slice(-4)}` : "—"}</span>
                             <span style={{fontSize:12,color:"#64748b",fontFamily:"'JetBrains Mono',monospace"}}>{a.to ? `${a.to.slice(0,6)}…${a.to.slice(-4)}` : "—"}</span>
-                            <span style={{fontSize:12,color:"#475569"}}>{timeAgo(a.block)}</span>
+                            <span style={{fontSize:12,color:"#475569"}}>{timeAgo(a.timestamp)}</span>
                             <a href={`https://tempo.xyz/tx/${a.tx}`} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"#38bdf8",fontFamily:"'JetBrains Mono',monospace",textDecoration:"none"}}>{a.tx.slice(0,8)}…↗</a>
                           </div>
                         );
@@ -3427,8 +3438,12 @@ const loadCards = async () => {
 
       </main>
 
-      <footer className="wm-footer" style={{borderTop:"1px solid rgba(255,255,255,.04)",padding:"16px 24px",display:"flex",justifyContent:"space-between",fontSize:13,color:"#1e293b"}}>
+      <footer className="wm-footer" style={{borderTop:"1px solid rgba(255,255,255,.04)",padding:"16px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,color:"#1e293b"}}>
         <span>Whalemon TCG</span>
+        <a href="https://x.com/WhalemonTCG" target="_blank" rel="noopener noreferrer" style={{display:"flex",alignItems:"center",gap:5,color:"#475569",textDecoration:"none",fontSize:12,transition:"color .15s"}} onMouseEnter={o=>o.currentTarget.style.color="#38bdf8"} onMouseLeave={o=>o.currentTarget.style.color="#475569"}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+          @WhalemonTCG
+        </a>
         <span style={{fontFamily:FM}}>Tempo · PATHUSD · Chain 4217</span>
       </footer>
     </div>
