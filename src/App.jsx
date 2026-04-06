@@ -132,6 +132,8 @@ const MARKETPLACE_ABI = [
   "function getMarketStats() external view returns (tuple(uint256 totalVolume,uint256 totalSales,uint256 totalListings,uint256 totalOffers))",
   "function cardToListing(uint256) view returns (uint256)",
   "function platformFeeBps() view returns (uint256)",
+  "function setPlatformFee(uint256 _feeBps) external",
+  "function accumulatedFees() view returns (uint256)",
   "function setBlacklist(address account, bool status) external",
   "function blacklisted(address) view returns (bool)",
   "function owner() view returns (address)",
@@ -3185,6 +3187,30 @@ const loadCards = async () => {
                       } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
                       setAdminLoading(false);
                     }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(168,85,247,.1)",border:"1px solid rgba(168,85,247,.3)",color:"#a855f7",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>
+                      {adminLoading ? "…" : "Update"}
+                    </button>
+                  </div>
+                </div>
+                {/* Marketplace Fee — uses Marketplace contract */}
+                <div style={{padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(14,165,233,.2)"}}>
+                  <label style={{fontSize:12,color:"#0ea5e9",display:"block",marginBottom:6}}>Marketplace Fee (basis points, 250 = 2.5%, max 1000 = 10%)</label>
+                  <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Platform fee on all marketplace sales. Deducted from the sale price. Current contract default: 250 (2.5%).</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <input id="admin-mkt-fee" defaultValue="250" style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                    <button onClick={async()=>{
+                      setAdminLoading(true);
+                      try {
+                        const prov = await ensureTempo();
+                        const signer = await prov.getSigner();
+                        const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, signer);
+                        const val = parseInt(document.getElementById("admin-mkt-fee").value);
+                        if(isNaN(val) || val < 0 || val > 1000) { toast("Must be 0-1000 basis points","err"); setAdminLoading(false); return; }
+                        const tx = await mkt.setPlatformFee(val);
+                        await tx.wait();
+                        toast("Marketplace fee updated ✓");
+                      } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
+                      setAdminLoading(false);
+                    }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>
                       {adminLoading ? "…" : "Update"}
                     </button>
                   </div>
