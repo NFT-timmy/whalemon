@@ -268,8 +268,22 @@ async function startEventListener() {
 async function backfillCards() {
   console.log(`[Oracle] Starting backfill scan...`);
 
+  const CHUNK_SIZE = 50000;
+  const latestBlock = await provider.getBlockNumber();
   const filter = whaleCards.filters.CardMinted();
-  const events = await whaleCards.queryFilter(filter, 0, "latest");
+
+  const events = [];
+  for (let from = 0; from <= latestBlock; from += CHUNK_SIZE) {
+    const to = Math.min(from + CHUNK_SIZE - 1, latestBlock);
+    console.log(`[Oracle] Scanning blocks ${from} → ${to}...`);
+    try {
+      const chunk = await whaleCards.queryFilter(filter, from, to);
+      events.push(...chunk);
+    } catch (err) {
+      console.error(`[Oracle] Chunk ${from}-${to} failed:`, err.message);
+    }
+  }
+
   console.log(`[Oracle] Found ${events.length} total CardMinted events`);
 
   const uncommitted = [];
