@@ -90,9 +90,13 @@ function isMetadataExists(tokenId) {
 // ─── TRAIT FETCHING ───
 // Reads WHEL NFT metadata to extract traits
 
-async function fetchWhaleTraits(tokenId) {
+async function fetchWhaleTraits(tokenId, sourceContractAddr) {
   try {
-    const tokenURI = await whelNFT.tokenURI(tokenId);
+    // Use the source contract to fetch tokenURI — supports multi-collection
+    const sourceNFT = sourceContractAddr
+      ? new ethers.Contract(sourceContractAddr, WHEL_NFT_ABI, provider)
+      : whelNFT;
+    const tokenURI = await sourceNFT.tokenURI(tokenId);
 
     let metadata;
 
@@ -168,8 +172,8 @@ async function commitCardStats(cardData) {
 
   try {
     // Check if stats are already set
-    const existing = await whaleCards.cardStats(tokenId);
-    if (existing.isSet) {
+    const existing = await whaleCards.getCardStats(tokenId);
+    if (existing[7]) {
       console.log(`[Oracle] Stats already committed for #${tokenId}, skipping`);
       return null;
     }
@@ -243,22 +247,25 @@ async function commitBatch(cardDataArray) {
 
 // ─── FULL PIPELINE: process a single minted card ───
 
-async function processCard(tokenId) {
+async function processCard(tokenId, sourceContractAddr, sourceTokenId) {
   console.log(`\n[Oracle] ══════════════════════════════════════`);
-  console.log(`[Oracle] Processing Whalemon #${tokenId}`);
+  console.log(`[Oracle] Processing Card #${tokenId} (source: ${sourceContractAddr || "unknown"} token ${sourceTokenId || tokenId})`);
   console.log(`[Oracle] ══════════════════════════════════════`);
+
+  // Use sourceTokenId for fetching traits from the source NFT
+  const traitTokenId = sourceTokenId || tokenId;
 
   // 1. Skip if already processed
   if (isMetadataExists(tokenId)) {
-    const existing = await whaleCards.cardStats(tokenId);
-    if (existing.isSet) {
+    const existing = await whaleCards.getCardStats(tokenId);
+    if (existing[7]) {
       console.log(`[Oracle] #${tokenId} already fully processed, skipping`);
       return null;
     }
   }
 
-  // 2. Fetch WHEL NFT traits and image
-  const { traits, imageURI } = await fetchWhaleTraits(tokenId);
+  // 2. Fetch source NFT traits and image
+  const { traits, imageURI } = await fetchWhaleTraits(traitTokenId, sourceContractAddr);
 
   // 3. Generate card (deterministic stats + AI ability)
   const cardData = await generateCard(tokenId, traits);
@@ -309,14 +316,17 @@ async function startEventListener() {
     const batch = pendingQueue.splice(0, BATCH_SIZE);
     console.log(`[Oracle] Processing batch of ${batch.length} cards...`);
 
-    for (const tokenId of batch) {
+    for (const item of batch) {
+      const tokenId = typeof item === "object" ? item.cardId : item;
+      const srcContract = typeof item === "object" ? item.sourceContract : null;
+      const srcTokenId = typeof item === "object" ? item.sourceTokenId : tokenId;
       try {
-        await processCard(tokenId);
+        await processCard(tokenId, srcContract, srcTokenId);
       } catch (err) {
         console.error(`[Oracle] Error processing #${tokenId}:`, err.message);
         // Re-queue for retry
         setTimeout(() => {
-          pendingQueue.push(tokenId);
+          pendingQueue.push(item);
         }, RETRY_DELAY);
       }
     }
@@ -329,11 +339,11 @@ async function startEventListener() {
     }
   }
 
-  // Listen for CardMinted events
-  whaleCards.on("CardMinted", (owner, whaleId, cardId, event) => {
-    const id = Number(whaleId);
-    console.log(`\n[Oracle] ⚡ CardMinted event: Whalemon #${id} minted by ${owner}`);
-    pendingQueue.push(id);
+  // Listen for CardMinted events (new multi-collection signature)
+  whaleCards.on("CardMinted", (owner, cardId, sourceContract, sourceTokenId, event) => {
+    const id = Number(cardId);
+    console.log(`\n[Oracle] ⚡ CardMinted event: Card #${id} minted by ${owner} from collection ${sourceContract} token ${Number(sourceTokenId)}`);
+    pendingQueue.push({ cardId: id, sourceContract, sourceTokenId: Number(sourceTokenId) });
     processPendingQueue();
   });
 
@@ -355,23 +365,25 @@ async function backfillCards() {
 
   for (const event of events) {
     const tokenId = Number(event.args.cardId);
+    const srcContract = event.args.sourceContract || null;
+    const srcTokenId = event.args.sourceTokenId ? Number(event.args.sourceTokenId) : tokenId;
     try {
-      const stats = await whaleCards.cardStats(tokenId);
-      if (!stats.isSet) {
-        uncommitted.push(tokenId);
+      const stats = await whaleCards.getCardStats(tokenId);
+      if (!stats[7]) {
+        uncommitted.push({ cardId: tokenId, sourceContract: srcContract, sourceTokenId: srcTokenId });
       }
     } catch {
-      uncommitted.push(tokenId);
+      uncommitted.push({ cardId: tokenId, sourceContract: srcContract, sourceTokenId: srcTokenId });
     }
   }
 
   console.log(`[Oracle] Found ${uncommitted.length} cards needing stats`);
 
-  for (const tokenId of uncommitted) {
+  for (const item of uncommitted) {
     try {
-      await processCard(tokenId);
+      await processCard(item.cardId, item.sourceContract, item.sourceTokenId);
     } catch (err) {
-      console.error(`[Oracle] Backfill failed for #${tokenId}:`, err.message);
+      console.error(`[Oracle] Backfill failed for #${item.cardId}:`, err.message);
     }
   }
 
