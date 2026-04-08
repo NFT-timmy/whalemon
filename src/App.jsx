@@ -176,6 +176,13 @@ const fetchIpfsJson = async (uri) => {
   }
   return null;
 };
+const fetchHttpJson = async (url) => {
+  try {
+    const resp = await fetch(url, {signal: AbortSignal.timeout(10000)});
+    if(resp.ok) return await resp.json();
+  } catch(_){}
+  return null;
+};
 const resolveIpfsImage = (img) => {
   if(!img) return img;
   if(img.startsWith("ipfs://")) return IPFS_GATEWAYS[0] + img.slice(7);
@@ -767,8 +774,8 @@ const loadCollections = async () => {
           const nftList = [];
           for(const id of ids){
             const cacheId = `${col.contractAddr}_${id}`;
-            let img = imgCache[cacheId] || nftImg(id);
-            if(!imgCache[cacheId]) {
+            let img = imgCache[cacheId] || null;
+            if(!img) {
               try {
                 const uri = await src.tokenURI(id);
                 if(uri.startsWith("data:application/json")){
@@ -776,14 +783,27 @@ const loadCollections = async () => {
                     ? JSON.parse(atob(uri.split(",")[1]))
                     : JSON.parse(decodeURIComponent(uri.split(",")[1]));
                   if(json.image) img = resolveIpfsImage(json.image);
-                } else if(uri.startsWith("http")||uri.startsWith("ipfs://")){
+                } else if(uri.startsWith("data:image")){
+                  img = uri;
+                } else if(uri.startsWith("ipfs://")) {
                   const json = await fetchIpfsJson(uri);
                   if(json && json.image) img = resolveIpfsImage(json.image);
+                } else if(uri.startsWith("http")) {
+                  // Check if it's an IPFS gateway URL or a regular HTTP metadata URL
+                  if(uri.includes("/ipfs/")) {
+                    const json = await fetchIpfsJson(uri);
+                    if(json && json.image) img = resolveIpfsImage(json.image);
+                  } else {
+                    const json = await fetchHttpJson(uri);
+                    if(json && json.image) img = resolveIpfsImage(json.image);
+                  }
                 }
-                imgCache[cacheId] = img;
+                // Only cache if we got a real image, not the placeholder
+                if(img) imgCache[cacheId] = img;
               } catch(_){}
               await new Promise(r=>setTimeout(r,100));
             }
+            if(!img) img = nftImg(id);
             let minted_ = false;
             try{ minted_ = await wCards.isCardMinted(col.contractAddr, id); }catch(_){}
             if(minted_) allMinted.add(`${col.contractAddr}_${id}`);
