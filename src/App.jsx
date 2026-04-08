@@ -189,6 +189,30 @@ const resolveIpfsImage = (img) => {
   return img;
 };
 
+function SeasonCountdown({ initialSecs }) {
+  const [secs, setSecs] = useState(Math.max(0, Math.floor(initialSecs)));
+  useEffect(() => { setSecs(Math.max(0, Math.floor(initialSecs))); }, [initialSecs]);
+  useEffect(() => {
+    if(secs <= 0) return;
+    const t = setInterval(() => setSecs(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(t);
+  }, [secs > 0]);
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s2 = secs % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  const urgent = secs > 0 && secs < 86400 * 3;
+  return (
+    <div style={{padding:"12px 16px",borderRadius:10,background:urgent?"rgba(245,158,11,.08)":"rgba(255,255,255,.03)",border:`1px solid ${urgent?"rgba(245,158,11,.3)":"#1e293b"}`,display:"flex",alignItems:"center",gap:12}}>
+      <div style={{fontSize:10,color:urgent?"#f59e0b":"#475569",fontWeight:600,whiteSpace:"nowrap"}}>⏱ Time Left</div>
+      <div style={{fontSize:18,fontWeight:800,fontFamily:"JetBrains Mono, monospace",color:secs<=0?"#ef4444":urgent?"#f59e0b":"#e2e8f0",letterSpacing:"0.05em"}}>
+        {secs <= 0 ? "Season Ended" : `${d}d ${pad(h)}h ${pad(m)}m ${pad(s2)}s`}
+      </div>
+    </div>
+  );
+}
+
 function StatBar({ label, value, max, color }) {
   return (
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
@@ -800,7 +824,7 @@ const loadCollections = async () => {
                 }
                 // Only cache if we got a real image, not the placeholder
                 if(img) imgCache[cacheId] = img;
-              } catch(_){}
+              } catch(e){ console.warn(`[NFT img] Failed to resolve image for ${col.name} #${id}:`, e.message || e); }
               await new Promise(r=>setTimeout(r,100));
             }
             if(!img) img = nftImg(id);
@@ -1112,22 +1136,39 @@ const loadMarketplace = async () => {
     try {
       const prov = await ensureTempo();
       const arena = new Contract(CONTRACTS.BATTLE_ARENA, BATTLE_ABI, prov);
-      const [poolInfo, timeLeft, fees] = await Promise.all([
+      const mkt = new Contract(CONTRACTS.MARKETPLACE, MARKETPLACE_ABI, prov);
+      const wc = new Contract(CONTRACTS.WHALE_CARDS, WHALECARDS_ABI, prov);
+      const [poolInfo, timeLeft, fees, entryFeeRaw, platformFeeBpsRaw, multiplierFeeRaw, seasonDurRaw, claimWinRaw, inactRaw, craftSplitRaw, mktFeeBpsRaw] = await Promise.all([
         arena.getPoolInfo().catch(()=>null),
         arena.seasonTimeRemaining().catch(()=>0n),
         arena.platformFees().catch(()=>0n),
+        arena.entryFee().catch(()=>1000000n),
+        arena.platformFeeBps().catch(()=>500n),
+        arena.multiplierFeePerUnit().catch(()=>100000n),
+        arena.seasonDuration().catch(()=>2592000n),
+        arena.claimWindow().catch(()=>7776000n),
+        arena.inactivityTimeout().catch(()=>1800n),
+        wc.craftPoolSplitBps().catch(()=>5000n),
+        mkt.platformFeeBps().catch(()=>250n),
       ]);
       if(poolInfo) {
         const pool = (Number(poolInfo[0]) / 1e6).toFixed(2);
         const season = Number(poolInfo[1]);
         const totalBattles = Number(poolInfo[3]);
         const timeLeftSecs = Number(timeLeft);
-        const daysLeft = Math.ceil(timeLeftSecs / 86400);
-        const timeLeftStr = timeLeftSecs > 0 ? `${daysLeft}d left` : "Ended";
         setAdminInfo({
           season, pool, totalBattles,
           fees: (Number(fees) / 1e6).toFixed(2),
-          timeLeft: timeLeftStr,
+          timeLeftSecs,
+          // live settings from contract
+          entryFee: Number(entryFeeRaw),
+          platformFeeBps: Number(platformFeeBpsRaw),
+          multiplierFee: Number(multiplierFeeRaw),
+          seasonDuration: Number(seasonDurRaw),
+          claimWindow: Number(claimWinRaw),
+          inactivityTimeout: Number(inactRaw),
+          craftPoolSplit: Number(craftSplitRaw),
+          mktFeeBps: Number(mktFeeBpsRaw),
         });
       }
     } catch(e) { console.error("loadAdminInfo", e); }
@@ -2948,7 +2989,7 @@ const loadCards = async () => {
             {/* Admin Tabs */}
             <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #1e293b",paddingBottom:12,flexWrap:"wrap",overflowX:"auto"}}>
               {[["season","🏆 Season"],["collections","🌊 Collections"],["settings","⚙️ Settings"],["revenue","💰 Revenue"],["emergency","🚨 Emergency"]].map(([id,label])=>(
-                <button key={id} onClick={()=>{ setAdminTab(id); if(id==="season"||id==="revenue") loadAdminInfo(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:adminTab===id?"rgba(14,165,233,.12)":"transparent",color:adminTab===id?"#38bdf8":"#64748b",fontSize:13,fontWeight:adminTab===id?700:500,cursor:"pointer",fontFamily:F,flexShrink:0,whiteSpace:"nowrap"}}>{label}</button>
+                <button key={id} onClick={()=>{ setAdminTab(id); if(id==="season"||id==="revenue"||id==="settings") loadAdminInfo(); }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:adminTab===id?"rgba(14,165,233,.12)":"transparent",color:adminTab===id?"#38bdf8":"#64748b",fontSize:13,fontWeight:adminTab===id?700:500,cursor:"pointer",fontFamily:F,flexShrink:0,whiteSpace:"nowrap"}}>{label}</button>
               ))}
             </div>
 
@@ -3018,19 +3059,21 @@ const loadCards = async () => {
                   <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>Current Season Status</div>
                   <button onClick={loadAdminInfo} style={{padding:"8px 16px",borderRadius:8,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:F,marginBottom:12}}>↻ Refresh</button>
                   {adminInfo && (
-                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                      {[
-                        ["Season",adminInfo.season,"#38bdf8"],
-                        ["Pool",`$${adminInfo.pool}`,"#4ade80"],
-                        ["Platform Fees",`$${adminInfo.fees}`,"#f59e0b"],
-                        ["Total Battles",adminInfo.totalBattles,"#a78bfa"],
-                        ["Time Left",adminInfo.timeLeft,"#64748b"],
-                      ].map(([l,v,c])=>(
-                        <div key={l} style={{padding:"10px 14px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",minWidth:90}}>
-                          <div style={{fontSize:10,color:"#475569",marginBottom:2}}>{l}</div>
-                          <div style={{fontSize:14,fontWeight:700,color:c,fontFamily:FM}}>{v}</div>
-                        </div>
-                      ))}
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        {[
+                          ["Season",adminInfo.season,"#38bdf8"],
+                          ["Pool",`$${adminInfo.pool}`,"#4ade80"],
+                          ["Platform Fees",`$${adminInfo.fees}`,"#f59e0b"],
+                          ["Total Battles",adminInfo.totalBattles,"#a78bfa"],
+                        ].map(([l,v,c])=>(
+                          <div key={l} style={{padding:"10px 14px",borderRadius:10,background:"rgba(255,255,255,.03)",border:"1px solid #1e293b",minWidth:90}}>
+                            <div style={{fontSize:10,color:"#475569",marginBottom:2}}>{l}</div>
+                            <div style={{fontSize:14,fontWeight:700,color:c,fontFamily:FM}}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <SeasonCountdown initialSecs={adminInfo.timeLeftSecs}/>
                     </div>
                   )}
                 </div>
@@ -3170,17 +3213,18 @@ const loadCards = async () => {
             {adminTab==="settings" && (
               <div style={{display:"flex",flexDirection:"column",gap:12}}>
                 {[
-                  {id:"admin-entry-fee",label:"Entry Fee (6 decimals, 1000000 = 1 PATHUSD)",def:"1000000",fn:"setEntryFee",parse:v=>parseInt(v)},
-                  {id:"admin-platform-fee",label:"Platform Fee (basis points, 500 = 5%, max 2000)",def:"500",fn:"setPlatformFee",parse:v=>parseInt(v)},
-                  {id:"admin-multiplier-fee",label:"Multiplier Fee Per Unit (6 decimals, 100000 = 0.1 PATHUSD)",def:"100000",fn:"setMultiplierFee",parse:v=>parseInt(v)},
-                  {id:"admin-season-duration",label:"Season Duration (seconds, 2592000 = 30 days)",def:"2592000",fn:"setSeasonDuration",parse:v=>parseInt(v)},
-                  {id:"admin-claim-window",label:"Claim Window (seconds, 7776000 = 90 days)",def:"7776000",fn:"setClaimWindow",parse:v=>parseInt(v)},
-                  {id:"admin-inactivity",label:"Inactivity Timeout (seconds, 1800 = 30 min)",def:"1800",fn:"setInactivityTimeout",parse:v=>parseInt(v)},
+                  {id:"admin-entry-fee",label:"Entry Fee (6 decimals, 1000000 = 1 PATHUSD)",fn:"setEntryFee",parse:v=>parseInt(v),liveVal:adminInfo?.entryFee,fmtHint:v=>`${(v/1e6).toFixed(2)} PATHUSD`},
+                  {id:"admin-platform-fee",label:"Platform Fee (basis points, 500 = 5%, max 2000)",fn:"setPlatformFee",parse:v=>parseInt(v),liveVal:adminInfo?.platformFeeBps,fmtHint:v=>`${(v/100).toFixed(1)}%`},
+                  {id:"admin-multiplier-fee",label:"Multiplier Fee Per Unit (6 decimals, 100000 = 0.1 PATHUSD)",fn:"setMultiplierFee",parse:v=>parseInt(v),liveVal:adminInfo?.multiplierFee,fmtHint:v=>`${(v/1e6).toFixed(2)} PATHUSD`},
+                  {id:"admin-season-duration",label:"Season Duration (seconds, 2592000 = 30 days)",fn:"setSeasonDuration",parse:v=>parseInt(v),liveVal:adminInfo?.seasonDuration,fmtHint:v=>{const d=Math.floor(v/86400);return `${d} days`;}},
+                  {id:"admin-claim-window",label:"Claim Window (seconds, 7776000 = 90 days)",fn:"setClaimWindow",parse:v=>parseInt(v),liveVal:adminInfo?.claimWindow,fmtHint:v=>{const d=Math.floor(v/86400);return `${d} days`;}},
+                  {id:"admin-inactivity",label:"Inactivity Timeout (seconds, 1800 = 30 min)",fn:"setInactivityTimeout",parse:v=>parseInt(v),liveVal:adminInfo?.inactivityTimeout,fmtHint:v=>{const m=Math.floor(v/60);return `${m} min`;}},
                 ].map(s=>(
                   <div key={s.id} style={{padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
                     <label style={{fontSize:12,color:"#64748b",display:"block",marginBottom:6}}>{s.label}</label>
+                    {s.liveVal !== undefined && <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Current on-chain: <span style={{color:"#38bdf8",fontFamily:FM}}>{s.liveVal}</span>{s.fmtHint ? ` (${s.fmtHint(s.liveVal)})` : ""}</div>}
                     <div style={{display:"flex",gap:8}}>
-                      <input id={s.id} defaultValue={s.def} style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                      <input id={s.id} defaultValue={s.liveVal !== undefined ? String(s.liveVal) : ""} key={s.liveVal} style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
                       <button onClick={async()=>{
                         setAdminLoading(true);
                         try {
@@ -3191,6 +3235,7 @@ const loadCards = async () => {
                           const tx = await arena[s.fn](val);
                           await tx.wait();
                           toast(`${s.label.split("(")[0].trim()} updated ✓`);
+                          loadAdminInfo();
                         } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
                         setAdminLoading(false);
                       }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>
@@ -3202,9 +3247,9 @@ const loadCards = async () => {
                 {/* Craft Pool Split — uses WhaleCards contract */}
                 <div style={{padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(168,85,247,.2)"}}>
                   <label style={{fontSize:12,color:"#a855f7",display:"block",marginBottom:6}}>Crafting Fee Split (basis points to prize pool, 5000 = 50%)</label>
-                  <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Controls how crafting fees are split. Value is the % going to prize pool. Remainder goes to platform. Default 5000 = 50/50 split.</div>
+                  <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Controls how crafting fees are split. Value is the % going to prize pool. Remainder goes to platform.{adminInfo?.craftPoolSplit !== undefined && <> Current on-chain: <span style={{color:"#a855f7",fontFamily:FM}}>{adminInfo.craftPoolSplit}</span> ({(adminInfo.craftPoolSplit/100).toFixed(0)}% to pool / {(100 - adminInfo.craftPoolSplit/100).toFixed(0)}% to platform).</>}</div>
                   <div style={{display:"flex",gap:8}}>
-                    <input id="admin-craft-split" defaultValue="5000" style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                    <input id="admin-craft-split" defaultValue={adminInfo?.craftPoolSplit !== undefined ? String(adminInfo.craftPoolSplit) : "5000"} key={adminInfo?.craftPoolSplit} style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
                     <button onClick={async()=>{
                       setAdminLoading(true);
                       try {
@@ -3215,6 +3260,7 @@ const loadCards = async () => {
                         const tx = await wc.setCraftPoolSplit(val);
                         await tx.wait();
                         toast("Craft pool split updated ✓");
+                        loadAdminInfo();
                       } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
                       setAdminLoading(false);
                     }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(168,85,247,.1)",border:"1px solid rgba(168,85,247,.3)",color:"#a855f7",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>
@@ -3224,10 +3270,10 @@ const loadCards = async () => {
                 </div>
                 {/* Marketplace Fee — uses Marketplace contract */}
                 <div style={{padding:"14px 16px",borderRadius:12,background:"#0a0e1f",border:"1px solid rgba(14,165,233,.2)"}}>
-                  <label style={{fontSize:12,color:"#0ea5e9",display:"block",marginBottom:6}}>Marketplace Fee (basis points, 250 = 2.5%, max 1000 = 10%)</label>
-                  <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Platform fee on all marketplace sales. Deducted from the sale price. Current contract default: 250 (2.5%).</div>
+                  <label style={{fontSize:12,color:"#0ea5e9",display:"block",marginBottom:6}}>Marketplace Fee (basis points, max 1000 = 10%)</label>
+                  <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Platform fee on all marketplace sales. Deducted from the sale price.{adminInfo?.mktFeeBps !== undefined && <> Current on-chain: <span style={{color:"#0ea5e9",fontFamily:FM}}>{adminInfo.mktFeeBps}</span> ({(adminInfo.mktFeeBps/100).toFixed(1)}%).</>}</div>
                   <div style={{display:"flex",gap:8}}>
-                    <input id="admin-mkt-fee" defaultValue="250" style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
+                    <input id="admin-mkt-fee" defaultValue={adminInfo?.mktFeeBps !== undefined ? String(adminInfo.mktFeeBps) : "250"} key={adminInfo?.mktFeeBps} style={{flex:1,padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:FM}}/>
                     <button onClick={async()=>{
                       setAdminLoading(true);
                       try {
@@ -3239,6 +3285,7 @@ const loadCards = async () => {
                         const tx = await mkt.setPlatformFee(val);
                         await tx.wait();
                         toast("Marketplace fee updated ✓");
+                        loadAdminInfo();
                       } catch(e) { toast("Failed: "+(e.reason||e.message||"Unknown"),"err"); }
                       setAdminLoading(false);
                     }} disabled={adminLoading} style={{padding:"8px 16px",borderRadius:8,background:"rgba(14,165,233,.1)",border:"1px solid rgba(14,165,233,.3)",color:"#38bdf8",fontSize:12,fontWeight:600,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>
