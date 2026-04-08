@@ -160,7 +160,8 @@ const el = (i) => ELEMENTS[i] ?? ELEMENTS[0];
 const nftImg = (id) => `https://placehold.co/400x400/0c4a6e/38bdf8?text=NFT+%23${id}`;
 
 // IPFS gateway fallback — tries multiple gateways
-const IPFS_GATEWAYS = ["https://ipfs.io/ipfs/","https://dweb.link/ipfs/","https://cf-ipfs.com/ipfs/","https://nftstorage.link/ipfs/"];
+const IPFS_GATEWAYS = ["https://ipfs.io/ipfs/","https://dweb.link/ipfs/","https://w3s.link/ipfs/","https://nftstorage.link/ipfs/","https://gateway.irys.xyz/ipfs/"];
+const ARWEAVE_GATEWAYS = ["https://gateway.irys.xyz/","https://arweave.net/"];
 const ipfsToHttp = (uri) => {
   if(!uri) return uri;
   if(uri.startsWith("ipfs://")) return IPFS_GATEWAYS[0] + uri.slice(7);
@@ -183,9 +184,20 @@ const fetchHttpJson = async (url) => {
   } catch(_){}
   return null;
 };
+const fetchArweaveJson = async (uri) => {
+  const txId = uri.startsWith("ar://") ? uri.slice(5) : uri.replace(/^https?:\/\/[^/]+\//, "");
+  for(const gw of ARWEAVE_GATEWAYS) {
+    try {
+      const resp = await fetch(gw + txId, {signal: AbortSignal.timeout(10000)});
+      if(resp.ok) return await resp.json();
+    } catch(_){}
+  }
+  return null;
+};
 const resolveIpfsImage = (img) => {
   if(!img) return img;
   if(img.startsWith("ipfs://")) return IPFS_GATEWAYS[0] + img.slice(7);
+  if(img.startsWith("ar://")) return ARWEAVE_GATEWAYS[0] + img.slice(5);
   return img;
 };
 
@@ -616,6 +628,16 @@ export default function WhalemonTCG() {
   const [colNfts,setColNfts]       = useState({}); // { collectionId: [{id, image, minted}] }
   const [whales,setWhales]         = useState([]);
   const [mintedIds,setMintedIds]   = useState(new Set());
+
+  // metadata base URL overrides per collection contract address (stored in localStorage)
+  const metaOverridesKey = "whalemon_meta_overrides";
+  const getMetaOverrides = () => { try { return JSON.parse(localStorage.getItem(metaOverridesKey)) || {}; } catch(_){ return {}; } };
+  const setMetaOverride = (contractAddr, baseUrl) => {
+    const o = getMetaOverrides();
+    if(baseUrl) o[contractAddr.toLowerCase()] = baseUrl;
+    else delete o[contractAddr.toLowerCase()];
+    localStorage.setItem(metaOverridesKey, JSON.stringify(o));
+  };
   const [loadingW,setLoadingW]     = useState(false);
   const [minting,setMinting]       = useState(null);
   const [revealCard,setRevealCard] = useState(null);
@@ -768,7 +790,7 @@ const loadCollections = async () => {
         let imgCache = {};
         try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
 
-        for(const col of cols.filter(c=>c.active)) {
+        for(const col of cols.filter(c=>c.active&&c.name)) {
           const src = new Contract(col.contractAddr, SOURCE_NFT_ABI, prov);
           let bal = 0;
           try { bal = Number(await src.balanceOf(addr)); } catch(_){}
@@ -796,12 +818,21 @@ const loadCollections = async () => {
           }
 
           const nftList = [];
+          const metaOverrides = getMetaOverrides();
+          const metaBase = metaOverrides[col.contractAddr.toLowerCase()] || null;
           for(const id of ids){
             const cacheId = `${col.contractAddr}_${id}`;
             let img = imgCache[cacheId] || null;
             if(!img) {
               try {
-                const uri = await src.tokenURI(id);
+                let uri;
+                // If metadata base URL override is set, use it instead of tokenURI
+                if(metaBase) {
+                  const sep = metaBase.endsWith("/") ? "" : "/";
+                  uri = metaBase + sep + id;
+                } else {
+                  uri = await src.tokenURI(id);
+                }
                 if(uri.startsWith("data:application/json")){
                   const json = uri.startsWith("data:application/json;base64,")
                     ? JSON.parse(atob(uri.split(",")[1]))
@@ -809,13 +840,18 @@ const loadCollections = async () => {
                   if(json.image) img = resolveIpfsImage(json.image);
                 } else if(uri.startsWith("data:image")){
                   img = uri;
+                } else if(uri.startsWith("ar://")) {
+                  const json = await fetchArweaveJson(uri);
+                  if(json && json.image) img = resolveIpfsImage(json.image);
                 } else if(uri.startsWith("ipfs://")) {
                   const json = await fetchIpfsJson(uri);
                   if(json && json.image) img = resolveIpfsImage(json.image);
                 } else if(uri.startsWith("http")) {
-                  // Check if it's an IPFS gateway URL or a regular HTTP metadata URL
                   if(uri.includes("/ipfs/")) {
                     const json = await fetchIpfsJson(uri);
+                    if(json && json.image) img = resolveIpfsImage(json.image);
+                  } else if(uri.includes("irys.xyz") || uri.includes("arweave.net")) {
+                    const json = await fetchHttpJson(uri);
                     if(json && json.image) img = resolveIpfsImage(json.image);
                   } else {
                     const json = await fetchHttpJson(uri);
@@ -2049,9 +2085,9 @@ const loadCards = async () => {
             </div>
 
             {/* Collection tabs */}
-            {collections.filter(c=>c.active).length > 0 && (
+            {collections.filter(c=>c.active&&c.name).length > 0 && (
               <div style={{display:"flex",gap:6,marginBottom:20,overflowX:"auto",paddingBottom:8,WebkitOverflowScrolling:"touch"}}>
-                {collections.filter(c=>c.active).map(col=>{
+                {collections.filter(c=>c.active&&c.name).map(col=>{
                   const nfts = colNfts[col.id] || [];
                   const isActive = activeCol === col.id;
                   return (
@@ -2998,50 +3034,105 @@ const loadCards = async () => {
               <div style={{display:"flex",flexDirection:"column",gap:16}}>
                 <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
                   <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>Approved Collections</div>
-                  {collections.map((col,i)=>(
-                    <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"12px",borderRadius:10,background:col.active?"rgba(74,222,128,.04)":"rgba(239,68,68,.04)",border:`1px solid ${col.active?"rgba(74,222,128,.15)":"rgba(239,68,68,.15)"}`,marginBottom:8}}>
-                      {col.imageURI && <img src={col.imageURI} alt="" style={{width:36,height:36,borderRadius:8,objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>}
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>{col.name}</div>
-                        <div style={{fontSize:11,color:"#64748b",fontFamily:FM}}>{col.contractAddr.slice(0,10)}…{col.contractAddr.slice(-6)}</div>
+                  {collections.map((col,i)=>{
+                    const metaOverrides = getMetaOverrides();
+                    const currentMeta = metaOverrides[col.contractAddr.toLowerCase()] || "";
+                    return (
+                    <div key={i} style={{padding:"12px",borderRadius:10,background:col.active?"rgba(74,222,128,.04)":"rgba(239,68,68,.04)",border:`1px solid ${col.active?"rgba(74,222,128,.15)":"rgba(239,68,68,.15)"}`,marginBottom:8}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                        {col.imageURI && <img src={col.imageURI} alt="" style={{width:36,height:36,borderRadius:8,objectFit:"cover",flexShrink:0}} onError={e=>e.target.style.display="none"}/>}
+                        <div style={{flex:1,minWidth:120}}>
+                          <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>{col.name || <span style={{color:"#475569",fontStyle:"italic"}}>Deleted</span>}</div>
+                          <div style={{fontSize:11,color:"#64748b",fontFamily:FM,wordBreak:"break-all"}}>{col.contractAddr.slice(0,10)}…{col.contractAddr.slice(-6)}</div>
+                          {currentMeta && <div style={{fontSize:10,color:"#0ea5e9",marginTop:2,wordBreak:"break-all"}}>Meta: {currentMeta}</div>}
+                        </div>
+                        <div style={{fontSize:11,color:col.active?"#4ade80":"#f87171",fontWeight:600,flexShrink:0}}>{col.active?"Active":"Inactive"}</div>
+                        <div style={{display:"flex",gap:4,flexShrink:0,flexWrap:"wrap"}}>
+                          <button onClick={async()=>{
+                            setAdminLoading(true);
+                            try {
+                              const signer = await provider.getSigner();
+                              const wc = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
+                              const tx = await wc.setCollectionActive(i, !col.active);
+                              await tx.wait();
+                              toast(`${col.name} ${col.active?"deactivated":"activated"} ✓`);
+                              await loadCollections();
+                            } catch(e){ toast("Failed: "+(e.reason||e.message),"err"); }
+                            setAdminLoading(false);
+                          }} disabled={adminLoading} style={{padding:"6px 10px",borderRadius:6,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:11,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>{col.active?"Deactivate":"Activate"}</button>
+                          {col.name && (
+                            <button onClick={async()=>{
+                              if(!confirm(`Delete "${col.name}"? This deactivates and clears the collection. You can re-add it later.`)) return;
+                              setAdminLoading(true);
+                              try {
+                                const signer = await provider.getSigner();
+                                const wc = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
+                                // Deactivate first if active
+                                if(col.active) {
+                                  const tx1 = await wc.setCollectionActive(i, false);
+                                  await tx1.wait();
+                                }
+                                // Clear name and image via updateCollection
+                                const tx2 = await wc.updateCollection(i, "", "");
+                                await tx2.wait();
+                                // Clear any metadata override
+                                setMetaOverride(col.contractAddr, "");
+                                toast(`"${col.name}" deleted ✓`);
+                                await loadCollections();
+                              } catch(e){ toast("Delete failed: "+(e.reason||e.message),"err"); }
+                              setAdminLoading(false);
+                            }} disabled={adminLoading} style={{padding:"6px 10px",borderRadius:6,background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",color:"#f87171",fontSize:11,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F,whiteSpace:"nowrap"}}>Delete</button>
+                          )}
+                        </div>
                       </div>
-                      <div style={{fontSize:11,color:col.active?"#4ade80":"#f87171",fontWeight:600}}>{col.active?"Active":"Inactive"}</div>
-                      <button onClick={async()=>{
-                        setAdminLoading(true);
-                        try {
-                          const signer = await provider.getSigner();
-                          const wc = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
-                          const tx = await wc.setCollectionActive(i, !col.active);
-                          await tx.wait();
-                          toast(`${col.name} ${col.active?"deactivated":"activated"} ✓`);
-                          await loadCollections();
-                        } catch(e){ toast("Failed: "+(e.reason||e.message),"err"); }
-                        setAdminLoading(false);
-                      }} disabled={adminLoading} style={{padding:"6px 12px",borderRadius:6,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:11,cursor:adminLoading?"not-allowed":"pointer",fontFamily:F}}>{col.active?"Deactivate":"Activate"}</button>
+                      {/* Metadata base URL override */}
+                      {col.active && (
+                        <div style={{marginTop:8,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                          <input id={`meta-override-${i}`} defaultValue={currentMeta} placeholder="Metadata base URL (optional)" style={{flex:1,minWidth:160,padding:"6px 10px",borderRadius:6,background:"#020817",border:"1px solid #1e293b",color:"#e2e8f0",fontSize:11,fontFamily:FM}}/>
+                          <button onClick={()=>{
+                            const val = document.getElementById(`meta-override-${i}`).value.trim();
+                            setMetaOverride(col.contractAddr, val);
+                            // Clear cached images for this collection so they refresh
+                            try {
+                              const imgCacheKey = `whalemon_imgs_v2`;
+                              const cache = JSON.parse(localStorage.getItem(imgCacheKey)) || {};
+                              for(const k of Object.keys(cache)) { if(k.toLowerCase().startsWith(col.contractAddr.toLowerCase())) delete cache[k]; }
+                              localStorage.setItem(imgCacheKey, JSON.stringify(cache));
+                            } catch(_){}
+                            toast(val ? "Metadata URL saved — refresh collections to apply" : "Metadata override cleared");
+                          }} style={{padding:"6px 10px",borderRadius:6,background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",color:"#38bdf8",fontSize:10,fontWeight:600,cursor:"pointer",fontFamily:F,whiteSpace:"nowrap",flexShrink:0}}>Save URL</button>
+                        </div>
+                      )}
                     </div>
-                  ))}
+                  );})}
                 </div>
                 <div style={{padding:"16px",borderRadius:12,background:"#0a0e1f",border:"1px solid #1e293b"}}>
                   <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>Add New Collection</div>
                   <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                    <input id="admin-col-name" placeholder="Collection Name" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:F}}/>
                     <input id="admin-col-addr" placeholder="0x… NFT Contract Address" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:12,fontFamily:FM}}/>
-                    <input id="admin-col-img" placeholder="/collections/name.png (image path)" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:F}}/>
+                    <input id="admin-col-name" placeholder="Collection Name" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:F}}/>
+                    <input id="admin-col-img" placeholder="Collection icon URL (e.g. /collections/name.png)" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#f1f5f9",fontSize:13,fontFamily:F}}/>
+                    <input id="admin-col-meta" placeholder="Metadata base URL (optional — overrides tokenURI)" style={{padding:"8px 12px",borderRadius:8,background:"#020817",border:"1px solid #1e293b",color:"#e2e8f0",fontSize:12,fontFamily:FM}}/>
+                    <div style={{fontSize:10,color:"#475569",lineHeight:1.5}}>Metadata base URL is optional. If provided, NFT images will be fetched from <span style={{color:"#64748b",fontFamily:FM}}>baseURL/tokenId</span> instead of calling tokenURI on-chain. Use this when the collection's IPFS is down.</div>
                     <button onClick={async()=>{
                       setAdminLoading(true);
                       try {
                         const name = document.getElementById("admin-col-name").value;
                         const addr_ = document.getElementById("admin-col-addr").value;
                         const img = document.getElementById("admin-col-img").value;
+                        const meta = document.getElementById("admin-col-meta").value.trim();
                         if(!name||!addr_) { toast("Name and address required","err"); setAdminLoading(false); return; }
                         const signer = await provider.getSigner();
                         const wc = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,signer);
                         const tx = await wc.addCollection(addr_, name, img||"");
                         await tx.wait();
+                        // Save metadata override if provided
+                        if(meta) setMetaOverride(addr_, meta);
                         toast(`Collection "${name}" added ✓`);
                         document.getElementById("admin-col-name").value="";
                         document.getElementById("admin-col-addr").value="";
                         document.getElementById("admin-col-img").value="";
+                        document.getElementById("admin-col-meta").value="";
                         await loadCollections();
                       } catch(e){ toast("Failed: "+(e.reason||e.message),"err"); }
                       setAdminLoading(false);
