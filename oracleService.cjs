@@ -386,15 +386,30 @@ async function main() {
       console.log(`[Oracle] Processing cards #${from} to #${to}${force ? " (FORCE — overwriting existing stats)" : ""}...`);
       for (let id = from; id <= to; id++) {
         try {
-          const origin = await whaleCards.getCardOrigin(id);
-          const sourceContract = origin[0];
-          const sourceTokenId  = Number(origin[1]);
-          const exists = origin[2];
-          if (!exists) {
+          // Use getCardStats to verify the card exists on chain (isSet or not)
+          // If getCardStats reverts, card doesn't exist — skip it
+          let sourceContract = null;
+          let sourceTokenId = id;
+          try {
+            const origin = await whaleCards.getCardOrigin(id);
+            sourceContract = origin[0];
+            sourceTokenId  = Number(origin[1]);
+          } catch (_) {
+            // getCardOrigin reverted — card not minted
             console.log(`[Oracle] #${id} not minted, skipping`);
             continue;
           }
+
+          // Also verify via ownerOf — if it reverts the token doesn't exist
+          try {
+            await whaleCards.ownerOf(id);
+          } catch (_) {
+            console.log(`[Oracle] #${id} not minted (no owner), skipping`);
+            continue;
+          }
+
           console.log(`[Oracle] Card #${id} origin: ${sourceContract} token ${sourceTokenId}`);
+
           if (!force) {
             const stats = await whaleCards.getCardStats(id).catch(() => null);
             if (stats && stats[7]) {
@@ -402,8 +417,11 @@ async function main() {
               continue;
             }
           }
+
+          // Delete cached metadata so stats are regenerated fresh
           const metaPath = require("path").join(process.env.METADATA_STORE_PATH || "./metadata", `${id}.json`);
           if (require("fs").existsSync(metaPath)) require("fs").unlinkSync(metaPath);
+
           await processCard(id, sourceContract, sourceTokenId);
         } catch (err) {
           console.error(`[Oracle] Failed card #${id}:`, err.message);
