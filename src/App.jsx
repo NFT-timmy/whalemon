@@ -715,10 +715,12 @@ const pvpPollRef                         = useRef(null);
 
   useEffect(()=>{
     if(connected && addr && provider){ loadBalance(); loadCollections(); loadCards(); }
-    else if(!connected){ loadCollections(); } // load collections even in explore mode
+    else if(!connected){ loadCollections(); }
     if(page==="market") { loadMarketplace(); loadActivities(); }
     if(page==="leaderboard"){ loadLeaderboard(); if(connected && addr) loadClaims(); }
     if(page==="admin" && isOwner) loadAdminInfo();
+    // Cancel any in-flight NFT loads on disconnect
+    return () => { if(colLoadAbortRef.current) colLoadAbortRef.current.abort(); };
   },[connected,addr]);
 
   // ── Wallet switch handling: reload data when address changes mid-session ──
@@ -783,104 +785,384 @@ const loadCollections = async () => {
 
         if(!connected || !addr) { setLoadingW(false); return; }
 
-        const allNfts = {};
-        const allMinted = new Set();
-        const allWhaleList = [];
+        // Restore ALL cached NFT data instantly from localStorage
+        const nftCacheKey = `whalemon_nfts_${addr.toLowerCase()}`;
+        let nftCache = {};
+        try { nftCache = JSON.parse(localStorage.getItem(nftCacheKey)) || {}; } catch(_){}
+
+        const cachedNfts = {};
+        const cachedWhales = [];
+        const cachedMinted = new Set();
+        for(const col of cols.filter(c=>c.active&&c.name)) {
+          const cached = nftCache[col.contractAddr.toLowerCase()];
+          if(cached && cached.nfts) {
+            cachedNfts[col.id] = cached.nfts;
+            for(const n of cached.nfts) cachedWhales.push(n);
+            if(cached.mintedKeys) cached.mintedKeys.forEach(k => cachedMinted.add(k));
+          } else {
+            cachedNfts[col.id] = null; // null = not loaded yet, [] = loaded but empty
+          }
+        }
+        setColNfts(cachedNfts);
+        setWhales(cachedWhales);
+        setMintedIds(cachedMinted);
+      } catch(e){ console.error("loadCollections",e); toast("Could not load collections","err"); }
+      setLoadingW(false);
+    };
+
+    // Abort controller ref for cancelling in-flight collection loads
+    const colLoadAbortRef = useRef(null);
+    const preloadQueueRef = useRef([]);
+    const preloadRunningRef = useRef(false);
+
+    const loadCollectionNfts = async (colId, signal) => {
+      if(!connected || !addr) return;
+      const col = collections.find(c => c.id === colId);
+      if(!col || !col.active || !col.name) return;
+
+      try {
+        const prov   = await ensureTempo();
+        const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
+        const src    = new Contract(col.contractAddr, SOURCE_NFT_ABI, prov);
+
+        // Check balance — if matches cache, skip entirely
+        let bal = 0;
+        try { bal = Number(await src.balanceOf(addr)); } catch(_){}
+        if(signal?.aborted) return;
+
+        const nftCacheKey = `whalemon_nfts_${addr.toLowerCase()}`;
+        let nftCache = {};
+        try { nftCache = JSON.parse(localStorage.getItem(nftCacheKey)) || {}; } catch(_){}
+        const cacheEntry = nftCache[col.contractAddr.toLowerCase()];
+
+        if(cacheEntry && cacheEntry.balance === bal && cacheEntry.nfts) {
+          // Balance unchanged — show cached data instantly
+          console.log(`[cache hit] ${col.name}: balance=${bal}, showing cache`);
+          setColNfts(prev => ({...prev, [col.id]: cacheEntry.nfts}));
+          setWhales(prev => {
+            const without = prev.filter(w => w.collectionId !== col.id);
+            return [...without, ...cacheEntry.nfts];
+          });
+          if(cacheEntry.mintedKeys) {
+            setMintedIds(prev => {
+              const next = new Set(prev);
+              cacheEntry.mintedKeys.forEach(k => next.add(k));
+              return next;
+            });
+          }
+
+          // Background ID verification — detect swaps (sold #70, bought #85 = same balance)
+          if(bal > 0) {
+            (async () => {
+              try {
+                const liveIds = [];
+                try {
+                  for(let i=0; i<bal; i++){
+                    if(signal?.aborted) return;
+                    const tid = Number(await src.tokenOfOwnerByIndex(addr, i));
+                    liveIds.push(tid);
+                    await new Promise(r=>setTimeout(r,80));
+                  }
+                } catch(_){
+                  const batchSize = 5;
+                  for(let start=0; start<10000 && liveIds.length<bal; start+=batchSize){
+                    if(signal?.aborted) return;
+                    const checks = [];
+                    for(let j=start; j<Math.min(start+batchSize,10000); j++){
+                      checks.push(src.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null));
+                    }
+                    const results = await Promise.all(checks);
+                    for(const r of results) if(r!==null) liveIds.push(r);
+                    if(liveIds.length>=bal) break;
+                    await new Promise(r=>setTimeout(r,150));
+                  }
+                }
+                if(signal?.aborted) return;
+
+                const cachedIds = new Set(cacheEntry.nfts.map(n => n.id));
+                const liveIdSet = new Set(liveIds);
+                const added   = liveIds.filter(id => !cachedIds.has(id));
+                const removed = cacheEntry.nfts.filter(n => !liveIdSet.has(n.id));
+
+                if(added.length === 0 && removed.length === 0) {
+                  console.log(`[id verify] ${col.name}: IDs match, cache is accurate`);
+                  return;
+                }
+
+                console.log(`[id verify] ${col.name}: swap detected! added=${JSON.stringify(added)} removed=${JSON.stringify(removed.map(n=>n.id))}`);
+
+                // Keep NFTs that still exist, remove sold ones
+                let updatedNfts = cacheEntry.nfts.filter(n => liveIdSet.has(n.id));
+                let updatedMintedKeys = (cacheEntry.mintedKeys||[]).filter(k => {
+                  const nftId = parseInt(k.split("_").pop());
+                  return liveIdSet.has(nftId);
+                });
+
+                // Fetch only the new NFTs (images + minted status)
+                const imgCacheKey = `whalemon_imgs_v2`;
+                let imgCache = {};
+                try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
+                const metaOverrides = getMetaOverrides();
+                const metaBase = metaOverrides[col.contractAddr.toLowerCase()] || null;
+
+                for(const id of added) {
+                  if(signal?.aborted) return;
+                  const cacheId = `${col.contractAddr}_${id}`;
+                  let img = imgCache[cacheId] || null;
+                  if(!img) {
+                    try {
+                      let uri;
+                      if(metaBase) {
+                        const sep = metaBase.endsWith("/") ? "" : "/";
+                        uri = metaBase + sep + id;
+                      } else {
+                        uri = await src.tokenURI(id);
+                      }
+                      if(uri.startsWith("data:application/json")){
+                        const json = uri.startsWith("data:application/json;base64,")
+                          ? JSON.parse(atob(uri.split(",")[1]))
+                          : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+                        if(json.image) img = resolveIpfsImage(json.image);
+                      } else if(uri.startsWith("data:image")){
+                        img = uri;
+                      } else if(uri.startsWith("ar://")) {
+                        const json = await fetchArweaveJson(uri);
+                        if(json && json.image) img = resolveIpfsImage(json.image);
+                      } else if(uri.startsWith("ipfs://")) {
+                        const json = await fetchIpfsJson(uri);
+                        if(json && json.image) img = resolveIpfsImage(json.image);
+                      } else if(uri.startsWith("http")) {
+                        if(uri.includes("/ipfs/")) {
+                          const json = await fetchIpfsJson(uri);
+                          if(json && json.image) img = resolveIpfsImage(json.image);
+                        } else if(uri.includes("irys.xyz") || uri.includes("arweave.net")) {
+                          const json = await fetchHttpJson(uri);
+                          if(json && json.image) img = resolveIpfsImage(json.image);
+                        } else {
+                          const json = await fetchHttpJson(uri);
+                          if(json && json.image) img = resolveIpfsImage(json.image);
+                        }
+                      }
+                      if(img) imgCache[cacheId] = img;
+                    } catch(e){ console.warn(`[NFT img] bg verify ${col.name} #${id}:`, e.message || e); }
+                    await new Promise(r=>setTimeout(r,100));
+                  }
+                  if(!img) img = nftImg(id);
+
+                  updatedNfts.push({id, image:img, collectionId:col.id, sourceContract:col.contractAddr});
+                }
+
+                // Check minted status for new NFTs only
+                for(const id of added) {
+                  if(signal?.aborted) return;
+                  try {
+                    const minted_ = await wCards.isCardMinted(col.contractAddr, id);
+                    if(minted_) {
+                      const key = `${col.contractAddr}_${id}`;
+                      updatedMintedKeys.push(key);
+                      setMintedIds(prev => { const next = new Set(prev); next.add(key); return next; });
+                    }
+                  } catch(_){}
+                  await new Promise(r=>setTimeout(r,80));
+                }
+
+                if(signal?.aborted) return;
+
+                // Update UI with corrected data
+                setColNfts(prev => ({...prev, [col.id]: updatedNfts}));
+                setWhales(prev => {
+                  const without = prev.filter(w => w.collectionId !== col.id);
+                  return [...without, ...updatedNfts];
+                });
+
+                // Save corrected cache
+                try { localStorage.setItem(imgCacheKey, JSON.stringify(imgCache)); } catch(_){}
+                let freshCache = {};
+                try { freshCache = JSON.parse(localStorage.getItem(nftCacheKey)) || {}; } catch(_){}
+                freshCache[col.contractAddr.toLowerCase()] = {balance: bal, nfts: updatedNfts, mintedKeys: updatedMintedKeys};
+                try { localStorage.setItem(nftCacheKey, JSON.stringify(freshCache)); } catch(_){}
+                console.log(`[id verify] ${col.name}: cache corrected, ${added.length} added, ${removed.length} removed`);
+              } catch(e){ console.warn(`[id verify] ${col.name} error:`, e.message || e); }
+            })();
+          }
+
+          return;
+        }
+
+        console.log(`[cache miss] ${col.name}: cached_bal=${cacheEntry?.balance}, actual_bal=${bal}, fetching fresh`);
+
+        if(bal === 0) {
+          setColNfts(prev => ({...prev, [col.id]: []}));
+          setWhales(prev => prev.filter(w => w.collectionId !== col.id));
+          // Update cache
+          nftCache[col.contractAddr.toLowerCase()] = {balance: 0, nfts: [], mintedKeys: []};
+          try { localStorage.setItem(nftCacheKey, JSON.stringify(nftCache)); } catch(_){}
+          return;
+        }
+
+        // Fetch token IDs
+        const ids = [];
+        try {
+          for(let i=0; i<bal; i++){
+            if(signal?.aborted) return;
+            const tid = Number(await src.tokenOfOwnerByIndex(addr, i));
+            ids.push(tid);
+            await new Promise(r=>setTimeout(r,80));
+          }
+        } catch(_){
+          const batchSize = 5;
+          for(let start=0; start<10000 && ids.length<bal; start+=batchSize){
+            if(signal?.aborted) return;
+            const checks = [];
+            for(let j=start; j<Math.min(start+batchSize,10000); j++){
+              checks.push(src.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null));
+            }
+            const results = await Promise.all(checks);
+            for(const r of results) if(r!==null) ids.push(r);
+            if(ids.length>=bal) break;
+            await new Promise(r=>setTimeout(r,150));
+          }
+        }
+
+        if(signal?.aborted) return;
+
+        // Fetch images
         const imgCacheKey = `whalemon_imgs_v2`;
         let imgCache = {};
         try { imgCache = JSON.parse(localStorage.getItem(imgCacheKey)) || {}; } catch(_){}
 
-        for(const col of cols.filter(c=>c.active&&c.name)) {
-          const src = new Contract(col.contractAddr, SOURCE_NFT_ABI, prov);
-          let bal = 0;
-          try { bal = Number(await src.balanceOf(addr)); } catch(_){}
-          if(bal === 0) { allNfts[col.id] = []; continue; }
+        const metaOverrides = getMetaOverrides();
+        const metaBase = metaOverrides[col.contractAddr.toLowerCase()] || null;
+        const nftList = [];
+        const mintedKeys = [];
 
-          const ids = [];
-          try {
-            for(let i=0; i<bal; i++){
-              const tid = Number(await src.tokenOfOwnerByIndex(addr, i));
-              ids.push(tid);
-              await new Promise(r=>setTimeout(r,80));
-            }
-          } catch(_){
-            const batchSize = 5;
-            for(let start=0; start<10000 && ids.length<bal; start+=batchSize){
-              const checks = [];
-              for(let j=start; j<Math.min(start+batchSize,10000); j++){
-                checks.push(src.ownerOf(j).then(o => o.toLowerCase()===addr.toLowerCase() ? j : null).catch(()=>null));
+        for(const id of ids){
+          if(signal?.aborted) return;
+          const cacheId = `${col.contractAddr}_${id}`;
+          let img = imgCache[cacheId] || null;
+          if(!img) {
+            try {
+              let uri;
+              if(metaBase) {
+                const sep = metaBase.endsWith("/") ? "" : "/";
+                uri = metaBase + sep + id;
+              } else {
+                uri = await src.tokenURI(id);
               }
-              const results = await Promise.all(checks);
-              for(const r of results) if(r!==null) ids.push(r);
-              if(ids.length>=bal) break;
-              await new Promise(r=>setTimeout(r,150));
-            }
-          }
-
-          const nftList = [];
-          const metaOverrides = getMetaOverrides();
-          const metaBase = metaOverrides[col.contractAddr.toLowerCase()] || null;
-          for(const id of ids){
-            const cacheId = `${col.contractAddr}_${id}`;
-            let img = imgCache[cacheId] || null;
-            if(!img) {
-              try {
-                let uri;
-                // If metadata base URL override is set, use it instead of tokenURI
-                if(metaBase) {
-                  const sep = metaBase.endsWith("/") ? "" : "/";
-                  uri = metaBase + sep + id;
-                } else {
-                  uri = await src.tokenURI(id);
-                }
-                if(uri.startsWith("data:application/json")){
-                  const json = uri.startsWith("data:application/json;base64,")
-                    ? JSON.parse(atob(uri.split(",")[1]))
-                    : JSON.parse(decodeURIComponent(uri.split(",")[1]));
-                  if(json.image) img = resolveIpfsImage(json.image);
-                } else if(uri.startsWith("data:image")){
-                  img = uri;
-                } else if(uri.startsWith("ar://")) {
-                  const json = await fetchArweaveJson(uri);
-                  if(json && json.image) img = resolveIpfsImage(json.image);
-                } else if(uri.startsWith("ipfs://")) {
+              if(uri.startsWith("data:application/json")){
+                const json = uri.startsWith("data:application/json;base64,")
+                  ? JSON.parse(atob(uri.split(",")[1]))
+                  : JSON.parse(decodeURIComponent(uri.split(",")[1]));
+                if(json.image) img = resolveIpfsImage(json.image);
+              } else if(uri.startsWith("data:image")){
+                img = uri;
+              } else if(uri.startsWith("ar://")) {
+                const json = await fetchArweaveJson(uri);
+                if(json && json.image) img = resolveIpfsImage(json.image);
+              } else if(uri.startsWith("ipfs://")) {
+                const json = await fetchIpfsJson(uri);
+                if(json && json.image) img = resolveIpfsImage(json.image);
+              } else if(uri.startsWith("http")) {
+                if(uri.includes("/ipfs/")) {
                   const json = await fetchIpfsJson(uri);
                   if(json && json.image) img = resolveIpfsImage(json.image);
-                } else if(uri.startsWith("http")) {
-                  if(uri.includes("/ipfs/")) {
-                    const json = await fetchIpfsJson(uri);
-                    if(json && json.image) img = resolveIpfsImage(json.image);
-                  } else if(uri.includes("irys.xyz") || uri.includes("arweave.net")) {
-                    const json = await fetchHttpJson(uri);
-                    if(json && json.image) img = resolveIpfsImage(json.image);
-                  } else {
-                    const json = await fetchHttpJson(uri);
-                    if(json && json.image) img = resolveIpfsImage(json.image);
-                  }
+                } else if(uri.includes("irys.xyz") || uri.includes("arweave.net")) {
+                  const json = await fetchHttpJson(uri);
+                  if(json && json.image) img = resolveIpfsImage(json.image);
+                } else {
+                  const json = await fetchHttpJson(uri);
+                  if(json && json.image) img = resolveIpfsImage(json.image);
                 }
-                // Only cache if we got a real image, not the placeholder
-                if(img) imgCache[cacheId] = img;
-              } catch(e){ console.warn(`[NFT img] Failed to resolve image for ${col.name} #${id}:`, e.message || e); }
-              await new Promise(r=>setTimeout(r,100));
-            }
-            if(!img) img = nftImg(id);
-            let minted_ = false;
-            try{ minted_ = await wCards.isCardMinted(col.contractAddr, id); }catch(_){}
-            if(minted_) allMinted.add(`${col.contractAddr}_${id}`);
-            const nft = {id, image:img, collectionId:col.id, sourceContract:col.contractAddr};
-            nftList.push(nft);
-            allWhaleList.push(nft);
-            await new Promise(r=>setTimeout(r,80));
+              }
+              if(img) imgCache[cacheId] = img;
+            } catch(e){ console.warn(`[NFT img] Failed to resolve image for ${col.name} #${id}:`, e.message || e); }
+            await new Promise(r=>setTimeout(r,100));
           }
-          allNfts[col.id] = nftList;
+          if(!img) img = nftImg(id);
+
+          const nft = {id, image:img, collectionId:col.id, sourceContract:col.contractAddr};
+          nftList.push(nft);
+
+          // Update UI progressively — each NFT appears as it loads
+          if(signal?.aborted) return;
+          setColNfts(prev => ({...prev, [col.id]: [...nftList]}));
+          setWhales(prev => {
+            const without = prev.filter(w => w.collectionId !== col.id);
+            return [...without, ...nftList];
+          });
         }
+
+        // Now check minted status (lower priority, UI already shows NFTs)
+        for(const nft of nftList) {
+          if(signal?.aborted) return;
+          try {
+            const minted_ = await wCards.isCardMinted(col.contractAddr, nft.id);
+            if(minted_) {
+              const key = `${col.contractAddr}_${nft.id}`;
+              mintedKeys.push(key);
+              setMintedIds(prev => { const next = new Set(prev); next.add(key); return next; });
+            }
+          } catch(_){}
+          await new Promise(r=>setTimeout(r,80));
+        }
+
+        // Save to caches
         try { localStorage.setItem(imgCacheKey, JSON.stringify(imgCache)); } catch(_){}
-        setColNfts(allNfts);
-        setWhales(allWhaleList);
-        setMintedIds(allMinted);
-      } catch(e){ console.error("loadCollections",e); toast("Could not load collections","err"); }
-      setLoadingW(false);
+        nftCache = {};
+        try { nftCache = JSON.parse(localStorage.getItem(nftCacheKey)) || {}; } catch(_){}
+        nftCache[col.contractAddr.toLowerCase()] = {balance: bal, nfts: nftList, mintedKeys};
+        try { localStorage.setItem(nftCacheKey, JSON.stringify(nftCache)); } catch(_){}
+
+        console.log(`[loaded] ${col.name}: ${nftList.length} NFTs cached`);
+      } catch(e){ console.error(`loadCollectionNfts(${col?.name})`,e); }
     };
+
+    // Load active tab, then preload remaining tabs in background
+    const loadActiveAndPreload = async (activeColId) => {
+      // Cancel any in-flight load
+      if(colLoadAbortRef.current) colLoadAbortRef.current.abort();
+      const controller = new AbortController();
+      colLoadAbortRef.current = controller;
+
+      // Load the active collection first
+      setLoadingW(true);
+      await loadCollectionNfts(activeColId, controller.signal);
+      if(!controller.signal.aborted) setLoadingW(false);
+
+      // Queue remaining collections for background preload
+      const remaining = collections.filter(c => c.active && c.name && c.id !== activeColId).map(c => c.id);
+      preloadQueueRef.current = remaining;
+
+      if(!preloadRunningRef.current) {
+        preloadRunningRef.current = true;
+        while(preloadQueueRef.current.length > 0) {
+          const nextId = preloadQueueRef.current.shift();
+          if(controller.signal.aborted) break;
+          await loadCollectionNfts(nextId, controller.signal);
+        }
+        preloadRunningRef.current = false;
+      }
+    };
+
+    // When active tab changes, load that collection (cached = instant, uncached = fetch)
+    useEffect(() => {
+      if(connected && addr && collections.length > 0 && page === "collections") {
+        const col = collections[activeCol];
+        if(col && col.active && col.name) {
+          // Check if we already have data (not null)
+          const existing = colNfts[activeCol];
+          if(existing === null || existing === undefined) {
+            // No cache — need to load
+            loadActiveAndPreload(activeCol);
+          } else {
+            // Have cache — trigger background refresh
+            const controller = new AbortController();
+            colLoadAbortRef.current = controller;
+            loadCollectionNfts(activeCol, controller.signal);
+          }
+        }
+      }
+    }, [activeCol, connected, addr, collections.length, page]);
 
 const loadMarketplace = async () => {
     setLoadingMkt(true);
@@ -2081,15 +2363,26 @@ const loadCards = async () => {
                 <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>My Collections</h2>
                 <p style={{fontSize:13,color:"#64748b"}}>Generate Whalemon cards from your NFTs — free, gas only.</p>
               </div>
-              <button onClick={()=>{loadCollections();loadCards();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600,flexShrink:0}}>↻ Refresh</button>
+              <button onClick={()=>{
+                // Clear NFT cache for active collection to force fresh fetch
+                try {
+                  const nftCacheKey = `whalemon_nfts_${addr?.toLowerCase()}`;
+                  const cache = JSON.parse(localStorage.getItem(nftCacheKey)) || {};
+                  const col = collections[activeCol];
+                  if(col) delete cache[col.contractAddr.toLowerCase()];
+                  localStorage.setItem(nftCacheKey, JSON.stringify(cache));
+                } catch(_){}
+                loadCollections();loadCards();
+              }} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600,flexShrink:0}}>↻ Refresh</button>
             </div>
 
             {/* Collection tabs */}
             {collections.filter(c=>c.active&&c.name).length > 0 && (
               <div style={{display:"flex",gap:6,marginBottom:20,overflowX:"auto",paddingBottom:8,WebkitOverflowScrolling:"touch"}}>
                 {collections.filter(c=>c.active&&c.name).map(col=>{
-                  const nfts = colNfts[col.id] || [];
+                  const nfts = colNfts[col.id];
                   const isActive = activeCol === col.id;
+                  const count = nfts === null ? "…" : (nfts||[]).length;
                   return (
                     <button key={col.id} onClick={()=>setActiveCol(col.id)} style={{
                       display:"flex",alignItems:"center",gap:8,padding:"8px 14px",borderRadius:10,
@@ -2100,19 +2393,19 @@ const loadCards = async () => {
                     }}>
                       {col.imageURI && <img src={col.imageURI} alt="" style={{width:22,height:22,borderRadius:6,objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>}
                       <span>{col.name}</span>
-                      {connected && <span style={{fontSize:11,opacity:.7}}>({nfts.length})</span>}
+                      {connected && <span style={{fontSize:11,opacity:.7}}>({count})</span>}
                     </button>
                   );
                 })}
               </div>
             )}
 
-            {loadingW && <div style={{textAlign:"center",padding:60,color:"#475569"}}>
+            {(loadingW || (connected && colNfts[activeCol] === null)) && <div style={{textAlign:"center",padding:60,color:"#475569"}}>
               <div style={{width:32,height:32,border:"2px solid rgba(14,165,233,.2)",borderTop:"2px solid #0ea5e9",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/>
               <div style={{fontSize:15}}>Loading your NFTs…</div>
             </div>}
 
-            {!loadingW && (!connected || (colNfts[activeCol]||[]).length===0) && (()=>{
+            {!loadingW && colNfts[activeCol] !== null && (!connected || (colNfts[activeCol]||[]).length===0) && (()=>{
               const colLinks = {
                 "0x3e12fcb20ad532f653f2907d2ae511364e2ae696": {emoji:"🐋",text:"Whale Up from Whelmart",url:"https://stablewhel.xyz/collection/4217/0x3e12fcb20ad532f653f2907d2ae511364e2ae696"},
                 "0x1ee82cc5946edbd88eaf90d6d3c2b5baa4f9966c": {emoji:"😺",text:"Adopt a Nyaw on Tempo",url:"https://stablewhel.xyz/collection/4217/0x1Ee82CC5946EdBD88eaf90D6d3c2B5baA4f9966C"},
