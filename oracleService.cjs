@@ -212,7 +212,7 @@ async function processCard(tokenId, sourceContractAddr, sourceTokenId) {
 
 // ─── EVENT LISTENER (polling — reliable on HTTP RPC) ───
 
-const POLL_INTERVAL = 6000; // poll every 6 seconds
+const POLL_INTERVAL = 6000;
 
 async function startEventListener() {
   console.log(`[Oracle] Starting poll-based listener on Tempo (chain ${TEMPO_CONFIG.chainId})...`);
@@ -239,10 +239,8 @@ async function startEventListener() {
   async function processPendingQueue() {
     if (processing || pendingQueue.length === 0) return;
     processing = true;
-
     const batch = pendingQueue.splice(0, BATCH_SIZE);
     console.log(`[Oracle] Processing batch of ${batch.length} cards...`);
-
     for (const item of batch) {
       try {
         await processCard(item.cardId, item.sourceContract, item.sourceTokenId);
@@ -251,7 +249,6 @@ async function startEventListener() {
         pendingQueue.push(item);
       }
     }
-
     processing = false;
     if (pendingQueue.length > 0) setTimeout(processPendingQueue, RETRY_DELAY);
   }
@@ -264,7 +261,6 @@ async function startEventListener() {
         const from = lastBlock + 1;
         const to = Math.min(currentBlock, lastBlock + 500);
         const events = await whaleCards.queryFilter(filter, from, to);
-
         if (events.length > 0) {
           console.log(`[Oracle] Blocks ${from}→${to}: found ${events.length} CardMinted event(s)`);
           for (const ev of events) {
@@ -276,13 +272,11 @@ async function startEventListener() {
           }
           processPendingQueue();
         }
-
         lastBlock = to;
       }
     } catch (err) {
       console.error(`[Oracle] Poll error:`, err.message);
     }
-
     setTimeout(poll, POLL_INTERVAL);
   }
 
@@ -385,23 +379,31 @@ async function main() {
   if (args.includes("--process-range")) {
     const fromArg = args[args.indexOf("--process-range") + 1];
     const toArg   = args[args.indexOf("--process-range") + 2];
+    const force   = args.includes("--force");
     if (fromArg && toArg) {
       const from = parseInt(fromArg);
       const to   = parseInt(toArg);
-      console.log(`[Oracle] Force-processing cards #${from} to #${to}...`);
+      console.log(`[Oracle] Processing cards #${from} to #${to}${force ? " (FORCE — overwriting existing stats)" : ""}...`);
       for (let id = from; id <= to; id++) {
         try {
-          // fetch origin from contract so we get the right sourceContract/sourceTokenId
           const origin = await whaleCards.getCardOrigin(id);
           const sourceContract = origin[0];
           const sourceTokenId  = Number(origin[1]);
-          console.log(`[Oracle] Card #${id} origin: ${sourceContract} token ${sourceTokenId}`);
-          // force reprocess even if metadata file exists
-          const stats = await whaleCards.getCardStats(id).catch(() => null);
-          if (stats && stats[7]) {
-            console.log(`[Oracle] #${id} already has stats on-chain, skipping`);
+          const exists = origin[2];
+          if (!exists) {
+            console.log(`[Oracle] #${id} not minted, skipping`);
             continue;
           }
+          console.log(`[Oracle] Card #${id} origin: ${sourceContract} token ${sourceTokenId}`);
+          if (!force) {
+            const stats = await whaleCards.getCardStats(id).catch(() => null);
+            if (stats && stats[7]) {
+              console.log(`[Oracle] #${id} already committed, skipping (use --force to overwrite)`);
+              continue;
+            }
+          }
+          const metaPath = require("path").join(process.env.METADATA_STORE_PATH || "./metadata", `${id}.json`);
+          if (require("fs").existsSync(metaPath)) require("fs").unlinkSync(metaPath);
           await processCard(id, sourceContract, sourceTokenId);
         } catch (err) {
           console.error(`[Oracle] Failed card #${id}:`, err.message);
