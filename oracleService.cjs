@@ -382,6 +382,36 @@ async function main() {
     }
   }
 
+  if (args.includes("--process-range")) {
+    const fromArg = args[args.indexOf("--process-range") + 1];
+    const toArg   = args[args.indexOf("--process-range") + 2];
+    if (fromArg && toArg) {
+      const from = parseInt(fromArg);
+      const to   = parseInt(toArg);
+      console.log(`[Oracle] Force-processing cards #${from} to #${to}...`);
+      for (let id = from; id <= to; id++) {
+        try {
+          // fetch origin from contract so we get the right sourceContract/sourceTokenId
+          const origin = await whaleCards.getCardOrigin(id);
+          const sourceContract = origin[0];
+          const sourceTokenId  = Number(origin[1]);
+          console.log(`[Oracle] Card #${id} origin: ${sourceContract} token ${sourceTokenId}`);
+          // force reprocess even if metadata file exists
+          const stats = await whaleCards.getCardStats(id).catch(() => null);
+          if (stats && stats[7]) {
+            console.log(`[Oracle] #${id} already has stats on-chain, skipping`);
+            continue;
+          }
+          await processCard(id, sourceContract, sourceTokenId);
+        } catch (err) {
+          console.error(`[Oracle] Failed card #${id}:`, err.message);
+        }
+      }
+      console.log(`[Oracle] Range processing complete.`);
+      process.exit(0);
+    }
+  }
+
   await startEventListener();
 }
 
