@@ -761,26 +761,8 @@ const pvpPollRef                         = useRef(null);
     } catch(e){ console.warn("balance",e); }
   };
 
-const loadCollections = async (forceRefresh) => {
-      // --- Phase 0: Restore from cache instantly (skip spinner if cache exists) ---
-      const nftCacheKey = addr ? `whalemon_col_${addr.toLowerCase()}` : null;
-      let cacheRestored = false;
-      if(nftCacheKey && !forceRefresh) {
-        try {
-          const cached = JSON.parse(localStorage.getItem(nftCacheKey));
-          if(cached && cached.colNfts && cached.whales) {
-            setColNfts(cached.colNfts);
-            setWhales(cached.whales);
-            setMintedIds(new Set(cached.mintedKeys || []));
-            if(cached.collections) setCollections(cached.collections);
-            cacheRestored = true;
-            console.log(`[cache] restored NFTs from cache instantly`);
-          }
-        } catch(_){}
-      }
-
-      // Only show spinner if no cache was restored
-      if(!cacheRestored) setLoadingW(true);
+const loadCollections = async () => {
+      setLoadingW(true);
       try {
         const prov   = await ensureTempo();
         const wCards = new Contract(CONTRACTS.WHALE_CARDS,WHALECARDS_ABI,prov);
@@ -896,19 +878,6 @@ const loadCollections = async (forceRefresh) => {
         setColNfts(allNfts);
         setWhales(allWhaleList);
         setMintedIds(allMinted);
-
-        // Save full NFT state to cache for instant restore next time
-        if(nftCacheKey) {
-          try {
-            localStorage.setItem(nftCacheKey, JSON.stringify({
-              colNfts: allNfts,
-              whales: allWhaleList,
-              mintedKeys: [...allMinted],
-              collections: cols,
-            }));
-            console.log(`[cache] saved NFT state for next visit`);
-          } catch(_){}
-        }
       } catch(e){ console.error("loadCollections",e); toast("Could not load collections","err"); }
       setLoadingW(false);
     };
@@ -2112,7 +2081,7 @@ const loadCards = async () => {
                 <h2 style={{fontSize:24,fontWeight:700,color:"#f1f5f9",marginBottom:4}}>My Collections</h2>
                 <p style={{fontSize:13,color:"#64748b"}}>Generate Whalemon cards from your NFTs — free, gas only.</p>
               </div>
-              <button onClick={()=>{loadCollections(true);loadCards();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600,flexShrink:0}}>↻ Refresh</button>
+              <button onClick={()=>{loadCollections();loadCards();}} style={{padding:"8px 18px",borderRadius:10,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#94a3b8",fontSize:14,cursor:"pointer",fontFamily:F,fontWeight:600,flexShrink:0}}>↻ Refresh</button>
             </div>
 
             {/* Collection tabs */}
@@ -2157,7 +2126,7 @@ const loadCards = async () => {
                 <div style={{fontSize:18,color:"#475569",fontWeight:600,marginBottom:8}}>{connected ? `No ${col?.name||"NFTs"} in your wallet` : "Connect your wallet to view your NFTs"}</div>
                 <div style={{fontSize:14,color:"#334155",marginBottom:20}}>{connected ? `You need ${col?.name||"NFTs"} to generate Whalemon cards from this collection.` : "Or browse the app in explore mode."}</div>
                 <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
-                  {connected && <button onClick={()=>loadCollections(true)} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>}
+                  {connected && <button onClick={loadCollections} style={{padding:"10px 24px",borderRadius:10,background:"linear-gradient(135deg,#0ea5e9,#6366f1)",border:"none",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:F}}>Try Again</button>}
                   {link && <a href={link.url} target="_blank" rel="noopener noreferrer" style={{padding:"10px 24px",borderRadius:10,background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:F,textDecoration:"none",display:"inline-block"}}>{link.emoji} {link.text} →</a>}
                 </div>
               </div>
