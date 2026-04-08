@@ -210,10 +210,12 @@ async function processCard(tokenId, sourceContractAddr, sourceTokenId) {
   return cardData;
 }
 
-// ─── EVENT LISTENER ───
+// ─── EVENT LISTENER (polling — reliable on HTTP RPC) ───
+
+const POLL_INTERVAL = 6000; // poll every 6 seconds
 
 async function startEventListener() {
-  console.log(`[Oracle] Starting event listener on Tempo (chain ${TEMPO_CONFIG.chainId})...`);
+  console.log(`[Oracle] Starting poll-based listener on Tempo (chain ${TEMPO_CONFIG.chainId})...`);
   console.log(`[Oracle] WhaleCards: ${CONTRACTS.WHALE_CARDS}`);
   console.log(`[Oracle] Oracle:     ${oracleWallet.address}`);
 
@@ -228,8 +230,11 @@ async function startEventListener() {
     console.warn(`[Oracle] Could not verify oracle authorization:`, err.message);
   }
 
-  let pendingQueue = [];
+  let lastBlock = await provider.getBlockNumber();
+  console.log(`[Oracle] ✓ Starting from block ${lastBlock}. Polling every ${POLL_INTERVAL / 1000}s...\n`);
+
   let processing = false;
+  const pendingQueue = [];
 
   async function processPendingQueue() {
     if (processing || pendingQueue.length === 0) return;
@@ -243,24 +248,45 @@ async function startEventListener() {
         await processCard(item.cardId, item.sourceContract, item.sourceTokenId);
       } catch (err) {
         console.error(`[Oracle] Error processing #${item.cardId}:`, err.message);
-        setTimeout(() => { pendingQueue.push(item); }, RETRY_DELAY);
+        pendingQueue.push(item);
       }
     }
 
     processing = false;
-    if (pendingQueue.length > 0) setTimeout(processPendingQueue, 1000);
+    if (pendingQueue.length > 0) setTimeout(processPendingQueue, RETRY_DELAY);
   }
 
-  // Listen for CardMinted events (v3 multi-collection signature)
-  whaleCards.on("CardMinted", (owner, cardId, sourceContract, sourceTokenId, event) => {
-    const id = Number(cardId);
-    console.log(`\n[Oracle] ⚡ CardMinted event: Card #${id} minted by ${owner} from ${sourceContract} token ${Number(sourceTokenId)}`);
-    pendingQueue.push({ cardId: id, sourceContract, sourceTokenId: Number(sourceTokenId) });
-    processPendingQueue();
-  });
+  async function poll() {
+    try {
+      const currentBlock = await provider.getBlockNumber();
+      if (currentBlock > lastBlock) {
+        const filter = whaleCards.filters.CardMinted();
+        const from = lastBlock + 1;
+        const to = Math.min(currentBlock, lastBlock + 500);
+        const events = await whaleCards.queryFilter(filter, from, to);
 
-  console.log(`[Oracle] ✓ Listening for CardMinted events...`);
-  console.log(`[Oracle] Ready. Waiting for mints...\n`);
+        if (events.length > 0) {
+          console.log(`[Oracle] Blocks ${from}→${to}: found ${events.length} CardMinted event(s)`);
+          for (const ev of events) {
+            const id = Number(ev.args[1]);
+            const sourceContract = ev.args[2];
+            const sourceTokenId = Number(ev.args[3]);
+            console.log(`[Oracle] ⚡ CardMinted: Card #${id} from ${sourceContract} token ${sourceTokenId}`);
+            pendingQueue.push({ cardId: id, sourceContract, sourceTokenId });
+          }
+          processPendingQueue();
+        }
+
+        lastBlock = to;
+      }
+    } catch (err) {
+      console.error(`[Oracle] Poll error:`, err.message);
+    }
+
+    setTimeout(poll, POLL_INTERVAL);
+  }
+
+  poll();
 }
 
 // ─── BACKFILL ───
