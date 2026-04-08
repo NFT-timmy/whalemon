@@ -82,19 +82,28 @@ function generateStats(tokenId, traits) {
 
   const rarity = determineRarity(seed);
   const element = determineElement(seed);
-  const multiplier = RARITIES[rarity].statMultiplier;
 
-  // Base stats from seed, then scaled by rarity multiplier
-  const baseAttack = extractStat(seed, 4, 20, 70);
-  const baseDefense = extractStat(seed, 6, 20, 70);
-  const baseHealth = extractStat(seed, 8, 80, 200);
-  const baseSpeed = extractStat(seed, 10, 20, 70);
+  // Rarity-banded stat ranges — higher rarity ALWAYS produces higher stats
+  // regardless of roll. No overlap between bands.
+  const statRanges = [
+    // Common
+    { atkMin: 20, atkMax: 40, defMin: 15, defMax: 35, hpMin: 60,  hpMax: 110, spdMin: 15, spdMax: 35 },
+    // Uncommon
+    { atkMin: 41, atkMax: 58, defMin: 36, defMax: 52, hpMin: 111, hpMax: 160, spdMin: 36, spdMax: 52 },
+    // Rare
+    { atkMin: 59, atkMax: 72, defMin: 53, defMax: 66, hpMin: 161, hpMax: 210, spdMin: 53, spdMax: 66 },
+    // Epic
+    { atkMin: 73, atkMax: 85, defMin: 67, defMax: 78, hpMin: 211, hpMax: 255, spdMin: 67, spdMax: 78 },
+    // Legendary
+    { atkMin: 86, atkMax: 100, defMin: 79, defMax: 100, hpMin: 256, hpMax: 300, spdMin: 79, spdMax: 100 },
+  ];
 
-  // Apply rarity multiplier and clamp to valid ranges
-  const attack = Math.min(100, Math.round(baseAttack * multiplier));
-  const defense = Math.min(100, Math.round(baseDefense * multiplier));
-  const health = Math.min(300, Math.round(baseHealth * multiplier));
-  const speed = Math.min(100, Math.round(baseSpeed * multiplier));
+  const r = statRanges[rarity];
+
+  const attack  = extractStat(seed, 4,  r.atkMin, r.atkMax);
+  const defense = extractStat(seed, 6,  r.defMin, r.defMax);
+  const health  = extractStat(seed, 8,  r.hpMin,  r.hpMax);
+  const speed   = extractStat(seed, 10, r.spdMin, r.spdMax);
 
   return {
     tokenId,
